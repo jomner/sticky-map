@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>mc.goobabs.com</title>
+<!-- Real 3D map (three.js 0.128, MIT, three-LICENSE.txt) with a flat minimap (Leaflet 1.9.4, BSD, Leaflet-LICENSE.txt),
+     kept at map.goobabs.com/3d as a backup; the main map (index.html) is the pre-drawn one again since 2026-11-11.
+     The world comes from sticky-map: tiles/<day>/blocks/<px>_<pz>.bin (visible blocks per 128-block piece, zlib),
+     and the flat and height pictures for the minimap and the far-away terrain. -->
+<link rel="stylesheet" href="leaflet.css">
+<style>
+  /* Monocraft: a free (SIL Open Font License) font made to look like Minecraft's; licence in Monocraft-OFL.txt */
+  @font-face { font-family: Monocraft; src: url("Monocraft.ttf") format("truetype"); font-display: swap; }
+  :root { --bg: #14161a; --panel: rgba(20, 22, 26, .9); --text: #e6e6e6; --muted: #9aa0a8; --on: #3b4250;
+          --hover: #2a2e35; --line: #000; --spawn: #f2c94c; --font: Monocraft, ui-monospace, Consolas, monospace;
+          color-scheme: dark; }
+  * { border-radius: 0 !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); color: var(--text); font: 14px/1.4 var(--font); }
+  #view { position: absolute; inset: 0; transition: opacity .2s; }
+  #view canvas { display: block; touch-action: none; }
+  #labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+  .panel { position: absolute; z-index: 1000; background: var(--panel); border: 2px solid var(--line);
+           box-shadow: 0 2px 10px rgba(0, 0, 0, .45); }
+  #title { top: calc(12px + env(safe-area-inset-top, 0px)); left: calc(12px + env(safe-area-inset-left, 0px));
+           padding: 8px 12px; max-width: calc(100vw - 260px); }
+  #title h1 { margin: 0; font-size: 16px; font-weight: normal; }
+  #title p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+  #side { top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); width: 204px; }
+  #mini { width: 204px; height: 204px; cursor: pointer; border-bottom: 2px solid var(--line); background: var(--bg); }
+  #mini .leaflet-tile { image-rendering: pixelated; image-rendering: crisp-edges; }
+  .row { display: flex; }
+  .row + .row { border-top: 2px solid var(--line); }
+  .row button { flex: 1; background: none; color: var(--text); border: 0; padding: 7px 0; font: 13px var(--font); cursor: pointer; }
+  .row button + button { border-left: 2px solid var(--line); }
+  .row button:hover { background: var(--hover); }
+  .row button:focus-visible { outline: 2px solid var(--spawn); outline-offset: -2px; }
+  .row button[aria-pressed="true"] { background: var(--on); }
+  #coords { bottom: calc(16px + env(safe-area-inset-bottom, 0px)); left: calc(12px + env(safe-area-inset-left, 0px));
+            color: var(--muted); padding: 5px 9px; font-size: 13px; }
+  #zoom { left: calc(12px + env(safe-area-inset-left, 0px)); top: calc(12px + env(safe-area-inset-top, 0px)); display: none; }
+  #nogl { top: 50%; left: 50%; transform: translate(-50%, -50%); padding: 14px 18px; max-width: calc(100vw - 48px); }
+  #nogl a, #title a { color: var(--text); }
+  .leaflet-container { background: var(--bg); font-family: var(--font); }
+  /* labels over the 3D view: places, spawn and live players */
+  .lbl { position: absolute; left: 0; top: 0; white-space: nowrap; will-change: transform; }
+  .lbl span { position: absolute; left: 0; bottom: 10px; transform: translateX(-50%); font: 13px var(--font);
+              color: var(--c, #fff); text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000; }
+  .lbl i { position: absolute; left: -4px; top: -4px; width: 6px; height: 6px; background: #fff; border: 1px solid #000; }
+  .lbl.spawn i { background: var(--spawn); width: 8px; height: 8px; left: -5px; top: -5px; }
+  .lbl.player b { position: absolute; left: -8px; top: -8px; width: 14px; height: 14px; border: 1px solid #000;
+                  background-color: var(--c, #7cff6b); background-repeat: no-repeat; background-size: 112px auto;
+                  background-position: -14px -14px; image-rendering: pixelated; }
+  .lbl.player b::after { content: ""; position: absolute; inset: 0; background: inherit; background-color: transparent;
+                         background-position: -70px -14px; }          /* the skin's hat layer */
+  .lbl.player span { font-size: 12px; bottom: 9px; }
+  .minidot { background: var(--c, #7cff6b); border: 1px solid #000; }
+  #online { color: #7cff6b; }
+  @media (hover: none) { #coords { display: none; } }
+  @media (max-width: 600px) {
+    #side { width: 124px; } #mini { width: 124px; height: 124px; }
+    #title { max-width: calc(100vw - 172px); } #title h1 { font-size: 13px; } #title p { font-size: 11px; }
+    .row button { font-size: 11px; }
+  }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div id="labels"></div>
+<div id="title" class="panel"><h1>mc.goobabs.com</h1><p id="asof">Loading…</p><p id="online" hidden></p></div>
+<div id="side" class="panel">
+  <div id="mini" title="Click to go there"></div>
+  <div class="row" role="group" aria-label="World">
+    <button data-world="overworld">Overworld</button><button data-world="nether">Nether</button>
+  </div>
+  <div class="row">
+    <button id="left" title="Turn the view a quarter left">⟲</button><button id="persp" title="Switch between a flat isometric look and a camera with depth">Iso</button><button id="right" title="Turn the view a quarter right">⟳</button>
+  </div>
+</div>
+<div id="coords" class="panel">x –, z –</div>
+<div id="nogl" class="panel" hidden>This browser can't show the 3D map. <a href="./">Open the main map</a>.</div>
+<script src="leaflet.js"></script>
+<script src="three.min.js"></script>
+<script src="OrbitControls.js"></script>
+<script>
+(async function () {
+  // ---------------------------------------------------------------- data and the world being shown
+  let m;
+  try { m = await (await fetch('map.json', { cache: 'no-store' })).json(); }
+  catch (e) { document.getElementById('asof').textContent = 'Not drawn yet'; return; }
+  const day = new Date(m.taken.replace(' ', 'T') + ':00Z');
+  document.getElementById('asof').textContent =
+    day.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }) + ', ' + m.taken.slice(11) + ' UTC';
+  const WORLDS = {
+    overworld: { blocks: 'blocks', flat: 'flat', height: 'height', ground: 66 },
+    nether:    { blocks: 'nether-blocks', flat: 'nether', height: 'nether-height', ground: 45 },
+  };
+  const PIECE = (m.layers.blocks || {}).piece || 128;
+  const mobile = matchMedia('(hover: none)').matches || Math.min(innerWidth, innerHeight) < 600;
+  let world = null;
+
+  // ---------------------------------------------------------------- three.js
+  let renderer;
+  try { renderer = new THREE.WebGLRenderer({ antialias: !mobile }); }
+  catch (e) { document.getElementById('nogl').hidden = false; return; }
+  renderer.setPixelRatio(Math.min(devicePixelRatio, mobile ? 1.5 : 2));
+  renderer.setClearColor(0x14161a);
+  document.getElementById('view').appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  const near = new THREE.Group(), far = new THREE.Group();
+  scene.add(near, far);
+  const solidMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+  const waterMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.68, depthWrite: false });
+  const glassMat = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.35, depthWrite: false });
+  const farMat = new THREE.MeshBasicMaterial({ vertexColors: true });
+
+  // two cameras orbiting the same point: an isometric-looking one (orthographic) and one with depth (perspective)
+  const VIEW = 64;                                      // blocks from the middle to the top edge at zoom 1 (iso)
+  const ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, -4000, 4000);
+  const persp = new THREE.PerspectiveCamera(40, 1, 1, 6000);
+  let cam = ortho, controls;
+  function size() {
+    const w = innerWidth, h = innerHeight;
+    renderer.setSize(w, h);
+    ortho.left = -VIEW * w / h; ortho.right = VIEW * w / h; ortho.top = VIEW; ortho.bottom = -VIEW; ortho.updateProjectionMatrix();
+    persp.aspect = w / h; persp.updateProjectionMatrix();
+  }
+  function makeControls(target) {
+    if (controls) controls.dispose();
+    controls = new THREE.OrbitControls(cam, renderer.domElement);
+    controls.enableDamping = true; controls.dampingFactor = 0.1;
+    controls.minPolarAngle = 0.12; controls.maxPolarAngle = Math.PI * 0.46;
+    controls.minZoom = 0.04; controls.maxZoom = 16; controls.minDistance = 12; controls.maxDistance = 2400;
+    controls.screenSpacePanning = false;                // drag-to-move slides over the ground, not up into the sky
+    controls.target.copy(target);
+    controls.addEventListener('change', moved);
+  }
+  size(); makeControls(new THREE.Vector3());
+  addEventListener('resize', () => { size(); moved(); });
+
+  // where the camera looks: the point it orbits, turned into block x, z
+  const here = () => [Math.floor(controls.target.x), Math.floor(controls.target.z)];
+  // how far the view reaches from the middle, in blocks (for what to load)
+  function reach() {
+    if (cam === ortho) return VIEW * Math.max(1, innerWidth / innerHeight) / ortho.zoom * 1.4;
+    return cam.position.distanceTo(controls.target) * 1.3;
+  }
+
+  // ---------------------------------------------------------------- block colours (from map.json, as on the map)
+  const pal = new Uint8Array(256 * 16 * 3);             // [id][data] -> rgb
+  for (let id = 0; id < 256; id++) for (let dv = 0; dv < 16; dv++) {
+    const c = id === 35 ? m.wool[dv] : (m.colours[id] || m.other);
+    pal.set(id === 8 || id === 9 ? m.water : id === 20 ? m.glass : c, (id * 16 + dv) * 3);
+  }
+
+  // ---------------------------------------------------------------- the builder (a worker): piece file -> meshes
+  // Each block record is 6 bytes: x, z, y, id, data, faces (1 +x, 2 -x, 4 top, 16 +z, 32 -z). Faces get the map's
+  // shading: tops full, the sides darker by direction, as if lit from one side; each block a touch lighter or
+  // darker than its neighbours so single blocks read as blocks. Small blocks become little shapes.
+  const workerSrc = `
+    let pal = null;
+    const SHADE = { 1: 0.84, 2: 0.74, 4: 1.0, 16: 0.70, 32: 0.88 };
+    const SMALL = new Set([66, 27, 28, 50, 75, 76, 85, 63, 68]);
+    onmessage = async (e) => {
+      if (e.data.pal) { pal = e.data.pal; return; }
+      const { key, url } = e.data;
+      try {
+        const r = await fetch(url);
+        if (!r.ok) { postMessage({ key, empty: true }); return; }
+        const raw = new Uint8Array(await new Response(r.body.pipeThrough(new DecompressionStream('deflate'))).arrayBuffer());
+        // first count the faces of each kind (solid, water, glass), then fill arrays of exactly that size
+        const need = [0, 0, 0];
+        for (let i = 0; i < raw.length; i += 6) {
+          const id = raw[i + 3], f = raw[i + 5];
+          if (SMALL.has(id)) { need[0] += 10; continue; }
+          need[id === 8 || id === 9 ? 1 : id === 20 ? 2 : 0] += BITS[f & 55];
+        }
+        const out = need.map(mk);
+        for (let i = 0; i < raw.length; i += 6) {
+          const x = raw[i], z = raw[i + 1], y = raw[i + 2], id = raw[i + 3], dv = raw[i + 4], f = raw[i + 5];
+          const p = (id * 16 + (id === 35 ? dv : 0)) * 3;
+          if (SMALL.has(id)) { small(out[0], id, x, y, z); continue; }
+          const water = id === 8 || id === 9, k = water ? 1 : id === 20 ? 2 : 0;
+          const h = ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) >>> 0, v = k ? 1 : 0.93 + (h % 8) / 100;
+          RGB[0] = pal[p]; RGB[1] = pal[p + 1]; RGB[2] = pal[p + 2];
+          box(out[k], x, y, z, x + 1, y + (water ? 0.88 : 1), z + 1, RGB, f, v);   // water sits a little lower
+        }
+        const res = out.map(o => o.n ? { pos: o.pos.subarray(0, o.n * 3), col: o.col.subarray(0, o.n * 3), idx: o.idx.subarray(0, o.n * 1.5) } : null);
+        postMessage({ key, res }, out.filter(o => o.n).flatMap(o => [o.pos.buffer, o.col.buffer, o.idx.buffer]));
+      } catch (err) { postMessage({ key, error: String(err) }); }
+    };
+    const BITS = new Uint8Array(64).map((_, f) => [1, 2, 4, 16, 32].filter(b => f & b).length);
+    const RGB = [0, 0, 0];
+    function mk(faces) {                              // room for this many quads (4 corners, 2 triangles each)
+      return { pos: new Float32Array(faces * 12), col: new Uint8Array(faces * 12), idx: new Uint32Array(faces * 6), n: 0 };
+    }
+    function quad(o, a0, a1, a2, b0, b1, b2, c0, c1, c2, d0, d1, d2, rgb, s) {
+      const n = o.n, p = n * 3, q = n * 1.5;
+      o.pos[p] = a0; o.pos[p + 1] = a1; o.pos[p + 2] = a2; o.pos[p + 3] = b0; o.pos[p + 4] = b1; o.pos[p + 5] = b2;
+      o.pos[p + 6] = c0; o.pos[p + 7] = c1; o.pos[p + 8] = c2; o.pos[p + 9] = d0; o.pos[p + 10] = d1; o.pos[p + 11] = d2;
+      const r = Math.min(255, rgb[0] * s), g = Math.min(255, rgb[1] * s), bl = Math.min(255, rgb[2] * s);
+      for (let k = 0; k < 12; k += 3) { o.col[p + k] = r; o.col[p + k + 1] = g; o.col[p + k + 2] = bl; }
+      o.idx[q] = n; o.idx[q + 1] = n + 1; o.idx[q + 2] = n + 2; o.idx[q + 3] = n; o.idx[q + 4] = n + 2; o.idx[q + 5] = n + 3;
+      o.n += 4;
+    }
+    function box(o, x0, y0, z0, x1, y1, z1, rgb, f, v) {
+      if (f & 4)  quad(o, x0, y1, z0, x0, y1, z1, x1, y1, z1, x1, y1, z0, rgb, SHADE[4] * v);
+      if (f & 1)  quad(o, x1, y0, z0, x1, y1, z0, x1, y1, z1, x1, y0, z1, rgb, SHADE[1] * v);
+      if (f & 2)  quad(o, x0, y0, z1, x0, y1, z1, x0, y1, z0, x0, y0, z0, rgb, SHADE[2] * v);
+      if (f & 16) quad(o, x1, y0, z1, x1, y1, z1, x0, y1, z1, x0, y0, z1, rgb, SHADE[16] * v);
+      if (f & 32) quad(o, x0, y0, z0, x0, y1, z0, x1, y1, z0, x1, y0, z0, rgb, SHADE[32] * v);
+    }
+    function small(o, id, x, y, z) {
+      const all = 1 | 2 | 4 | 16 | 32;
+      if (id === 66 || id === 27 || id === 28)       // rails: a plate on the ground
+        box(o, x, y, z, x + 1, y + 0.07, z + 1, id === 27 ? [170, 140, 60] : [118, 98, 78], 4, 1);
+      else if (id === 50 || id === 75 || id === 76) { // torches: a stick and a flame
+        box(o, x + 0.43, y, z + 0.43, x + 0.57, y + 0.5, z + 0.57, [110, 82, 50], all, 1);
+        box(o, x + 0.41, y + 0.5, z + 0.41, x + 0.59, y + 0.68, z + 0.59, id === 50 ? [255, 214, 80] : [200, 40, 30], all, 1);
+      } else if (id === 85)                            // fence post
+        box(o, x + 0.375, y, z + 0.375, x + 0.625, y + 1, z + 0.625, [150, 115, 70], all, 1);
+      else if (id === 63) {                            // standing sign: a post and a board
+        box(o, x + 0.45, y, z + 0.45, x + 0.55, y + 0.55, z + 0.55, [110, 85, 55], all, 1);
+        box(o, x + 0.1, y + 0.5, z + 0.45, x + 0.9, y + 0.95, z + 0.55, [180, 144, 90], all, 1);
+      } else if (id === 68)                            // wall sign: just a board
+        box(o, x + 0.1, y + 0.3, z + 0.45, x + 0.9, y + 0.75, z + 0.55, [180, 144, 90], all, 1);
+    }`;
+  const workers = Array.from({ length: Math.min(4, navigator.hardwareConcurrency || 2) }, () => {
+    const w = new Worker(URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' })));
+    w.postMessage({ pal }); w.onmessage = built; return w;
+  });
+  let nextWorker = 0;
+
+  // ---------------------------------------------------------------- pieces near the view: load, build, drop
+  const pieces = {};                                    // "world/px_pz" -> { state, group }
+  let available = new Set();
+  function geometry(o) {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(o.pos, 3));
+    g.setAttribute('color', new THREE.BufferAttribute(o.col, 3, true));
+    g.setIndex(new THREE.BufferAttribute(o.idx, 1));
+    g.computeBoundingSphere();
+    return g;
+  }
+  function built(e) {
+    const { key, res } = e.data, p = pieces[key];
+    if (!p) return;                                     // dropped while it was being built
+    if (!res) { p.state = 'empty'; return; }
+    const group = new THREE.Group();
+    const [px, pz] = key.split('/')[1].split('_').map(Number);
+    group.position.set(px * PIECE, 0, pz * PIECE);
+    [[res[0], solidMat, 0], [res[1], waterMat, 2], [res[2], glassMat, 3]].forEach(([o, mat, order]) => {
+      if (!o) return;
+      const mesh = new THREE.Mesh(geometry(o), mat); mesh.renderOrder = order; group.add(mesh);
+    });
+    p.group = group; p.state = 'ready';
+    if (key.startsWith(world + '/')) { near.add(group); hideFar(px, pz); }
+    needLabels = true;
+  }
+  function drop(key) {
+    const p = pieces[key];
+    if (p && p.group) { near.remove(p.group); p.group.children.forEach(c => c.geometry.dispose()); }
+    delete pieces[key];
+  }
+  const MAXR = mobile ? 300 : 520;                      // the most blocks out from the middle built in full 3D
+  function loadNear() {
+    if (!world) return;
+    const r = reach(), [cx, cz] = here();
+    const want = [];
+    if (r < MAXR * 1.6) {
+      const rr = Math.min(r, MAXR);
+      for (let px = Math.floor((cx - rr) / PIECE); px <= Math.floor((cx + rr) / PIECE); px++)
+        for (let pz = Math.floor((cz - rr) / PIECE); pz <= Math.floor((cz + rr) / PIECE); pz++) {
+          const k = px + '_' + pz;
+          if (!available.has(k)) continue;
+          const dx = (px + .5) * PIECE - cx, dz = (pz + .5) * PIECE - cz;
+          want.push([dx * dx + dz * dz, world + '/' + k]);
+        }
+    }
+    want.sort((a, b) => a[0] - b[0]);
+    const keep = new Set(want.map(w => w[1]));
+    for (const k of Object.keys(pieces)) if (!keep.has(k)) { drop(k); showFarFor(k); }
+    let busy = Object.values(pieces).filter(p => p.state === 'loading').length;
+    for (const [, k] of want) {
+      if (pieces[k] || busy >= 6) continue;
+      pieces[k] = { state: 'loading' }; busy++;
+      const url = new URL('tiles/' + m.id + '/' + WORLDS[world].blocks + '/' + k.split('/')[1] + '.bin', location.href).href;
+      workers[nextWorker++ % workers.length].postMessage({ key: k, url });
+    }
+  }
+
+  // ---------------------------------------------------------------- far away: a coarse terrain from the pictures
+  // Per region, every 4th block of the height and flat pictures as a surface, a block under the real tops so the
+  // full 3D pieces cover it where they're loaded (and those spots are hidden while they are).
+  const farRegions = {};                                // "world/rx_rz" -> { state, meshes: { "px_pz": mesh } }
+  const STEP = 4;
+  function img(url) {
+    return new Promise(done => {
+      const im = new Image();
+      im.onload = () => { const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
+        const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(im, 0, 0); done(g.getImageData(0, 0, im.width, im.height).data); };
+      im.onerror = () => done(null); im.src = url;
+    });
+  }
+  const H = {};                                         // height pictures, also for exact positions: "world/rx_rz" -> data
+  async function heights(w, rx, rz) {
+    const k = w + '/' + rx + '_' + rz;
+    if (!(k in H)) H[k] = img('tiles/' + m.id + '/' + WORLDS[w].height + '/0/' + rx + '_' + rz + '.png');
+    return H[k];
+  }
+  function heightNow(x, z) {                            // a number, or null if not known (yet)
+    const k = world + '/' + (x >> 9) + '_' + (z >> 9), d = H[k];
+    if (!d || d instanceof Promise) return null;
+    const i = 4 * (((z & 511) << 9) + (x & 511));
+    return d[i + 1] ? d[i] : null;
+  }
+  async function farRegion(rx, rz) {
+    const key = world + '/' + rx + '_' + rz;
+    if (farRegions[key]) return;
+    farRegions[key] = { state: 'loading', meshes: {} };
+    const w = world;
+    const hp = heights(w, rx, rz).then(d => (H[w + '/' + rx + '_' + rz] = d));
+    const [hd, cd] = await Promise.all([hp, img('tiles/' + m.id + '/' + WORLDS[w].flat + '/0/' + rx + '_' + rz + '.png')]);
+    const fr = farRegions[key];
+    if (!fr || !hd || !cd) { if (fr) fr.state = 'empty'; return; }
+    const per = PIECE / STEP;                           // grid cells per piece side
+    for (let qx = 0; qx < 512 / PIECE; qx++) for (let qz = 0; qz < 512 / PIECE; qz++) {
+      const n = per + 1, pos = new Float32Array(n * n * 3), col = new Uint8Array(n * n * 3), idx = [];
+      let any = false;
+      for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+        const lx = Math.min(511, qx * PIECE + i * STEP), lz = Math.min(511, qz * PIECE + j * STEP), q = 4 * (lz * 512 + lx), v = j * n + i;
+        const has = hd[q + 1] > 0; any = any || has;
+        pos.set([rx * 512 + qx * PIECE + i * STEP, has ? hd[q] : -50, rz * 512 + qz * PIECE + j * STEP], v * 3);
+        col.set([cd[q], cd[q + 1], cd[q + 2]], v * 3);
+      }
+      if (!any) continue;
+      for (let j = 0; j < per; j++) for (let i = 0; i < per; i++) {
+        const a = j * n + i; idx.push(a, a + n, a + n + 1, a, a + n + 1, a + 1);
+      }
+      const mesh = new THREE.Mesh(geometry({ pos, col, idx: new Uint32Array(idx) }), farMat);
+      const pk = (rx * 4 + qx) + '_' + (rz * 4 + qz);
+      fr.meshes[pk] = mesh;
+      if (world === w) { far.add(mesh); const p = pieces[w + '/' + pk]; mesh.visible = !(p && p.state === 'ready'); }
+    }
+    fr.state = 'ready';
+  }
+  function farMesh(px, pz) {
+    const fr = farRegions[world + '/' + Math.floor(px / 4) + '_' + Math.floor(pz / 4)];
+    return fr && fr.meshes[px + '_' + pz];
+  }
+  function hideFar(px, pz) { const f = farMesh(px, pz); if (f) f.visible = false; }
+  function showFarFor(key) {
+    const [w, k] = key.split('/'); if (w !== world) return;
+    const [px, pz] = k.split('_').map(Number), f = farMesh(px, pz); if (f) f.visible = true;
+  }
+  const FARMAX = mobile ? 1600 : 2600;
+  function loadFar() {
+    if (!world) return;
+    const r = Math.min(FARMAX, reach() * 1.1 + 256), [cx, cz] = here();
+    for (let rx = Math.floor((cx - r) / 512); rx <= Math.floor((cx + r) / 512); rx++)
+      for (let rz = Math.floor((cz - r) / 512); rz <= Math.floor((cz + r) / 512); rz++) farRegion(rx, rz);
+  }
+
+  // ---------------------------------------------------------------- labels: places, spawn, live players
+  const labelBox = document.getElementById('labels');
+  const labels = [];                                    // { el, x, y, z, world }
+  function label(cls, text, x, y, z, w) {
+    const el = document.createElement('div'); el.className = 'lbl ' + cls;
+    el.innerHTML = '<i></i><span></span>'; el.querySelector('span').textContent = text;
+    labelBox.appendChild(el);
+    const l = { el, x, y, z, world: w }; labels.push(l); return l;
+  }
+  if (m.spawn) label('spawn', 'Spawn', m.spawn[0] + .5, (m.spawnY ?? 66) + 1, m.spawn[1] + .5, 'overworld').el.title = 'Spawn ' + m.spawn.join(', ');
+  for (const p of m.places || [])
+    if (!(p.name === 'Spawn' && m.spawn)) label('', p.name, p.x + .5, (p.y ?? WORLDS[p.world].ground) + 1, p.z + .5, p.world);
+  const v3 = new THREE.Vector3();
+  let needLabels = true;
+  function placeLabel(l) {
+    if (l.world !== world) { l.el.hidden = true; return; }
+    v3.set(l.x, l.y, l.z).project(cam);
+    const out = v3.z > 1 || v3.x < -1.2 || v3.x > 1.2 || v3.y < -1.2 || v3.y > 1.2;
+    l.el.hidden = out;
+    if (!out) l.el.style.transform = 'translate(' + ((v3.x + 1) / 2 * innerWidth).toFixed(1) + 'px,' + ((1 - v3.y) / 2 * innerHeight).toFixed(1) + 'px)';
+  }
+
+  // ---------------------------------------------------------------- the minimap (flat, north up)
+  const flatLL = (x, z) => L.latLng(-z, x);
+  const mini = L.map('mini', { crs: L.CRS.Simple, minZoom: m.minZoom, maxZoom: 2, zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
+  let miniLayer = null, outline = null;
+  const miniDots = L.layerGroup().addTo(mini);
+  const ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), ray = new THREE.Raycaster(), hit = new THREE.Vector3();
+  function groundAt(sx, sy) {                           // a screen point -> where it meets the ground level
+    ray.setFromCamera({ x: sx, y: sy }, cam);
+    ground.constant = -(controls.target.y);
+    if (!ray.ray.intersectPlane(ground, hit)) return null;
+    const d = Math.hypot(hit.x - controls.target.x, hit.z - controls.target.z), lim = FARMAX;
+    if (d > lim) { hit.x = controls.target.x + (hit.x - controls.target.x) * lim / d; hit.z = controls.target.z + (hit.z - controls.target.z) * lim / d; }
+    return [hit.x, hit.z];
+  }
+  function follow() {
+    const [cx, cz] = [controls.target.x, controls.target.z];
+    const pts = [[-1, 1], [1, 1], [1, -1], [-1, -1]].map(([a, b]) => groundAt(a, b)).filter(Boolean).map(([x, z]) => flatLL(x, z));
+    const r = reach(), z = Math.max(m.minZoom, Math.min(2, Math.round(Math.log2(100 / r)) ));
+    mini.setView(flatLL(cx, cz), z, { animate: false });
+    if (outline) outline.setLatLngs(pts);
+    else outline = L.polygon(pts, { color: '#fff', weight: 1.5, fill: false, interactive: false }).addTo(mini);
+  }
+  mini.on('click', e => glideTo(e.latlng.lng, -e.latlng.lat));
+
+  // ---------------------------------------------------------------- moving the camera
+  function aim(x, z, y) {                               // put the orbit point on (x, y, z), keeping the angle
+    const off = cam.position.clone().sub(controls.target);
+    controls.target.set(x, y, z); cam.position.copy(controls.target).add(off);
+  }
+  function glideTo(x, z) {
+    const y0 = controls.target.y, x0 = controls.target.x, z0 = controls.target.z;
+    const y1 = heightNow(Math.floor(x), Math.floor(z)) ?? y0, t0 = performance.now();
+    (function step() {
+      const k = Math.min(1, (performance.now() - t0) / 600), e = k < .5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      aim(x0 + (x - x0) * e, z0 + (z - z0) * e, y0 + (y1 - y0) * e); controls.update(); moved();
+      if (k < 1) requestAnimationFrame(step);
+    })();
+  }
+  function turn(quarters) {                             // a smooth quarter turn around the orbit point
+    const off = cam.position.clone().sub(controls.target), sph = new THREE.Spherical().setFromVector3(off);
+    const a0 = sph.theta, a1 = a0 + quarters * Math.PI / 2, t0 = performance.now();
+    (function step() {
+      const k = Math.min(1, (performance.now() - t0) / 450), e = k < .5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      sph.theta = a0 + (a1 - a0) * e;
+      cam.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph)); controls.update(); moved();
+      if (k < 1) requestAnimationFrame(step);
+    })();
+  }
+  document.getElementById('left').onclick = () => turn(-1);
+  document.getElementById('right').onclick = () => turn(1);
+  const perspBtn = document.getElementById('persp');
+  function setPersp(on, keepZoom) {
+    const from = cam, to = on ? persp : ortho;
+    if (from === to) return;
+    const off = from.position.clone().sub(controls.target), t = controls.target.clone();
+    // keep about the same amount of ground in view
+    if (on) off.setLength(Math.max(20, VIEW / ortho.zoom / Math.tan(persp.fov * Math.PI / 360)));
+    else { if (!keepZoom) ortho.zoom = Math.max(0.04, VIEW / (off.length() * Math.tan(persp.fov * Math.PI / 360))); ortho.updateProjectionMatrix(); off.setLength(800); }
+    cam = to; cam.position.copy(t).add(off); cam.lookAt(t);
+    makeControls(t); controls.update();
+    perspBtn.textContent = on ? 'Depth' : 'Iso'; perspBtn.setAttribute('aria-pressed', on);
+    moved();
+  }
+  perspBtn.onclick = () => setPersp(cam === ortho);
+
+  // ---------------------------------------------------------------- showing a world
+  async function show(w, x, z, opts = {}) {
+    const el = document.getElementById('view');
+    if (world && w !== world) { el.style.opacity = 0; await new Promise(r => setTimeout(r, 200)); }
+    if (w !== world) {
+      for (const k of Object.keys(pieces)) drop(k);
+      far.clear();
+      for (const k of Object.keys(farRegions)) if (!k.startsWith(w + '/')) delete farRegions[k];
+      world = w;
+      available = new Set((m.layers[WORLDS[w].blocks] || {}).pieces || []);
+      if (miniLayer) miniLayer.remove();
+      const b = (m.layers[WORLDS[w].flat] || {}).bounds;
+      miniLayer = L.tileLayer('tiles/' + m.id + '/' + WORLDS[w].flat + '/{z}/{x}_{y}.png', { tileSize: m.tile,
+        minNativeZoom: m.minZoom, maxNativeZoom: 0, noWrap: true, errorTileUrl: 'data:image/gif;base64,R0lGODlhAQABAIAAABQWGgAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==',
+        bounds: b && L.latLngBounds(flatLL(b[0], b[1]), flatLL(b[2], b[3])) }).addTo(mini);
+      document.querySelectorAll('[data-world]').forEach(b => b.setAttribute('aria-pressed', b.dataset.world === w));
+      for (const e of Object.values(live)) e.shown = null;
+    }
+    const hd = await heights(w, Math.floor(x) >> 9, Math.floor(z) >> 9);
+    H[w + '/' + (Math.floor(x) >> 9) + '_' + (Math.floor(z) >> 9)] = hd;
+    const y = heightNow(Math.floor(x), Math.floor(z)) ?? WORLDS[w].ground;
+    if (opts.az !== undefined) {                        // a link: the angle and zoom it was saved with
+      setPersp(!!opts.persp, true);
+      if (!opts.persp) { ortho.zoom = opts.zoom; ortho.updateProjectionMatrix(); }
+      const sph = new THREE.Spherical(opts.persp ? opts.zoom : 800, opts.tilt * Math.PI / 180, opts.az * Math.PI / 180);
+      controls.target.set(x + .5, y + 1, z + .5); cam.position.copy(controls.target).add(new THREE.Vector3().setFromSpherical(sph));
+    } else aim(x + .5, z + .5, y + 1);
+    controls.update(); moved();
+    el.style.opacity = '';
+  }
+  document.querySelectorAll('[data-world]').forEach(btn => btn.onclick = () => {
+    const to = btn.dataset.world; if (to === world) return;
+    let [x, z] = here();
+    if (to === 'nether') { x = Math.floor(x / 8); z = Math.floor(z / 8); } else { x *= 8; z *= 8; }
+    show(to, x, z);
+  });
+
+  // ---------------------------------------------------------------- links: #world/x/z/zoom/turn/tilt/iso-or-depth
+  function save() {
+    if (!world) return;
+    const sph = new THREE.Spherical().setFromVector3(cam.position.clone().sub(controls.target));
+    const zoom = cam === ortho ? ortho.zoom.toFixed(2) : Math.round(sph.radius);
+    history.replaceState(null, '', '#' + [world, ...here(), zoom, Math.round(sph.theta * 180 / Math.PI),
+      Math.round(sph.phi * 180 / Math.PI), cam === ortho ? 'iso' : 'depth'].join('/'));
+  }
+  function fromHash() {
+    const h = location.hash.slice(1).split('/');
+    if (h.length < 3) return null;
+    let [w, x, z] = [h[0], +h[1], +h[2]];
+    if (h.length === 3) { [w, x, z] = ['overworld', +h[0], +h[1]]; }          // the oldest links: #x/z/zoom
+    if (w === 'flat' || w === 'iso') w = 'overworld';                           // links from the 2D map
+    if (!WORLDS[w] || isNaN(x) || isNaN(z)) return null;
+    if (h.length >= 7) return [w, x, z, { zoom: +h[3] || 1, az: +h[4] || 45, tilt: +h[5] || 55, persp: h[6] === 'depth' }];
+    return [w, x, z, { zoom: 1, az: 45 + 90 * (+h[4] || 0), tilt: 55, persp: false }];   // links from the pre-drawn map
+  }
+  addEventListener('hashchange', () => { const g = fromHash(); if (g) show(...g); });
+
+  // ---------------------------------------------------------------- what's under the cursor
+  const coords = document.getElementById('coords');
+  let lastPick = 0;
+  renderer.domElement.addEventListener('pointermove', e => {
+    if (performance.now() - lastPick < 80) return;
+    lastPick = performance.now();
+    ray.setFromCamera({ x: e.clientX / innerWidth * 2 - 1, y: -e.clientY / innerHeight * 2 + 1 }, cam);
+    const hits = ray.intersectObjects([...near.children, ...far.children.filter(c => c.visible)], true);
+    const h = hits.find(x => x.object.material !== waterMat && x.object.material !== glassMat) || hits[0];
+    if (!h) { coords.textContent = 'x –, z –'; return; }
+    const p = h.point.clone().addScaledVector(h.face.normal, -0.01);
+    const exact = h.object.material !== farMat;
+    coords.textContent = (exact ? '' : '≈ ') + 'x ' + Math.floor(p.x) + ', y ' + Math.floor(p.y) + ', z ' + Math.floor(p.z);
+  });
+
+  // ---------------------------------------------------------------- live players (livemap.lua + sticky-livemap-profiles)
+  const live = {};                                      // name -> { el, mini, world, from, to, t0 }
+  let profiles = {}, profilesAt = 0;
+  const GLIDE = 2000;
+  function styleOf(name, el) {
+    const pr = profiles[name] || {};
+    const col = /^#[0-9a-f]{6}$/i.test(pr.colour || '') ? pr.colour : null;
+    const skin = /^https:\/\/textures\.minecraft\.net\/texture\/[0-9a-f]+$/i.test(pr.skin || '') ? pr.skin : null;
+    if (col) el.style.setProperty('--c', col);
+    const face = el.querySelector('b'); if (face) face.style.backgroundImage = skin ? 'url("' + skin + '")' : 'none';
+  }
+  function now3(e, t) { const k = Math.min(1, (t - e.t0) / GLIDE); return e.from.map((v, i) => v + (e.to[i] - v) * k); }
+  function update(players) {
+    const t = performance.now(), seen = new Set();
+    for (const p of players) {
+      seen.add(p.name);
+      const pos = [p.x, p.y, p.z];
+      let e = live[p.name];
+      if (!e) {
+        const el = document.createElement('div'); el.className = 'lbl player';
+        el.innerHTML = '<b></b><span></span>'; el.querySelector('span').textContent = p.name; el.title = p.name;
+        labelBox.appendChild(el); styleOf(p.name, el);
+        const mk = L.marker([0, 0], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'minidot', iconSize: [6, 6] }) });
+        e = live[p.name] = { name: p.name, el, mini: mk, world: p.world, from: pos, to: pos, t0: t };
+        continue;
+      }
+      const cur = now3(e, t), jump = p.world !== e.world || Math.hypot(pos[0] - cur[0], pos[2] - cur[2]) > 64;
+      e.from = jump ? pos : cur; e.world = p.world; e.to = pos; e.t0 = t;
+    }
+    for (const n of Object.keys(live)) if (!seen.has(n)) { live[n].el.remove(); miniDots.removeLayer(live[n].mini); delete live[n]; }
+  }
+  async function poll() {
+    if (!m.live || document.visibilityState === 'hidden') return;
+    const el = document.getElementById('online');
+    let players = [];
+    try {
+      const d = await (await fetch(m.live, { cache: 'no-store' })).json();
+      players = (d.players || []).filter(p => typeof p.name === 'string' && isFinite(p.x) && isFinite(p.y) && isFinite(p.z));
+      const old = Date.now() / 1000 - d.time > 30;
+      if (old) players = [];
+      el.hidden = false; el.textContent = old ? 'live: server offline' : '● ' + players.length + ' online';
+      if (players.some(p => !profiles[p.name]) && Date.now() - profilesAt > 10000 || Date.now() - profilesAt > 300000) {
+        profilesAt = Date.now();
+        try {
+          profiles = await (await fetch(m.live.replace(/players\.json$/, 'profiles.json'), { cache: 'no-store' })).json() || {};
+          for (const e of Object.values(live)) { styleOf(e.name, e.el); const mel = e.mini.getElement && e.mini.getElement(); if (mel) styleOf(e.name, mel); }
+        } catch (e) { /* plain dots until the skins and colours are known */ }
+      }
+    } catch (e) { el.hidden = true; }
+    update(players);
+  }
+  if (m.live) { poll(); setInterval(poll, 2000); document.addEventListener('visibilitychange', poll); }
+
+  // ---------------------------------------------------------------- every frame
+  function moved() { needLabels = true; }               // (loading follows on its own 300 ms tick)
+  setInterval(() => { if (world) { loadNear(); loadFar(); follow(); save(); } }, 300);   // not tied to drawing frames
+  (function frame() {
+    requestAnimationFrame(frame);                       // first: one bad frame must never stop the drawing
+    controls.update();
+    const t = performance.now();
+    renderer.render(scene, cam);
+    if (!world) return;                                 // labels and dots once a world (and the minimap) is set up
+    for (const l of labels) placeLabel(l);
+    for (const e of Object.values(live)) {
+      const [x, y, z] = now3(e, t), here = e.world === world;
+      if (here) placeLabel({ el: e.el, x, y: y + 1.9, z, world: e.world }); else e.el.hidden = true;
+      if (here) {
+        e.mini.setLatLng(flatLL(x, z));
+        if (!miniDots.hasLayer(e.mini)) { e.mini.addTo(miniDots); const el = e.mini.getElement(); if (el) styleOf(e.name, el); }
+      } else if (miniDots.hasLayer(e.mini)) miniDots.removeLayer(e.mini);
+    }
+  })();
+
+  window.mapDebug = { pieces, farRegions, H, renderer };   // for looking into loading from the browser's console
+
+  // ---------------------------------------------------------------- start: a link's view, else spawn from the south-east
+  const h0 = fromHash(), sp = m.spawn || [0, 0];
+  if (h0) await show(...h0);
+  else await show('overworld', sp[0], sp[1], { zoom: 1, az: 45, tilt: 55, persp: false });
+})();
+</script>
+</body>
+</html>
