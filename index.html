@@ -1,0 +1,1065 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mc.goobabs.com</title>
+<!-- beta-map (MIT licence): drawn by beta_map.py, which writes map.json next to this page -->
+
+<!-- Leaflet 1.9.4 (BSD 2-Clause, Leaflet-LICENSE.txt), served from here so the map doesn't depend on a CDN -->
+<link rel="stylesheet" href="leaflet.css">
+<style>
+  /* Monocraft: a free (SIL Open Font License) font made to look like Minecraft's; licence in Monocraft-OFL.txt */
+  @font-face { font-family: Monocraft; src: url("Monocraft.ttf") format("truetype"); font-display: swap; }
+  /* Look: Pocket Edition's crafting screen, measured pixel by pixel from a 1920x1080 screenshot (2026-11-11).
+     Everything is built on one "screen pixel" --u (2 px; 1 px on phones), like the game's GUI scale:
+     - text: Monocraft draws one glyph pixel per 1/9 em, so font-size is 9u and every letter pixel is exactly u;
+       white text gets a u-wide shadow, secondary text is light grey with a dark grey shadow
+     - the outer frame (title, side panel, coordinates): 1u black outline, 2u bevel (light top left, dark bottom right)
+     - buttons: 2u light top, 1u light left, 1u near-black right and bottom; pressed: the colours swap and the label
+       drops 1u
+     - sunk wells (minimap, the direction box): the opposite of a button
+     Bevels are CSS borders, so corners meet on the diagonal the way the game's do. Colours are the screenshot's. */
+  :root { --u: 2px;
+          --bg: #2a2626; --edge: #000;
+          --face: #938681; --face-hi: #b9b0ac; --face-lo: #534a4f;
+          --btn: #978884; --btn-hover: #a69793; --btn-hi: #bab0aa; --btn-lo: #2a2829;
+          --down: #726467; --down-hi: #b9aeab; --down-lo: #2b2628;
+          --well: #a89995;
+          --text: #fff; --shadow: #3f3f3f; --dim: #c3b9b4; --dim-shadow: #6f6669;
+          --font: Monocraft, ui-monospace, Consolas, monospace; }
+  /* small screens, and phones held sideways (wide but short): the smaller scale */
+  @media (max-width: 600px), (max-height: 500px) { :root { --u: 1px; } }
+  * { border-radius: 0 !important; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: calc(9 * var(--u)) / calc(10 * var(--u)) var(--font); }
+  /* behind the tiles: the fog colour of the world on show (--void, set by show(); the same as the drawn tiles' edges) */
+  .leaflet-container { background: var(--void, var(--bg)); font: calc(9 * var(--u)) / calc(10 * var(--u)) var(--font); }
+  #map { position: absolute; inset: 0; }
+  .leaflet-tile { image-rendering: pixelated; image-rendering: crisp-edges; }
+
+  /* the outer frame */
+  .panel { position: absolute; z-index: 1000; box-sizing: border-box; background: var(--face);
+           text-shadow: var(--u) var(--u) 0 var(--shadow);
+           border: calc(2 * var(--u)) solid; border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+           box-shadow: 0 0 0 var(--u) var(--edge); }
+  #title { top: 14px; left: 62px; padding: calc(3 * var(--u)) calc(5 * var(--u)) calc(4 * var(--u));
+           max-width: calc(100vw - 330px); }
+  #title h1 { margin: 0; font: inherit; }
+  #title p { margin: var(--u) 0 0; color: var(--dim); text-shadow: var(--u) var(--u) 0 var(--dim-shadow); }
+  #title p#online { color: #6dff5a; text-shadow: var(--u) var(--u) 0 #1b3f16; }
+  #side { top: 14px; right: 14px; width: calc(120 * var(--u)); padding: calc(3 * var(--u));
+          display: grid; gap: calc(3 * var(--u)); }
+  #coords { bottom: 16px; left: 14px; padding: calc(3 * var(--u)) calc(5 * var(--u)) calc(4 * var(--u)); }
+  #prefs { bottom: 16px; right: 14px; width: calc(85 * var(--u)); padding: calc(3 * var(--u));
+           display: grid; gap: calc(3 * var(--u)); }
+
+  /* sunk wells */
+  #well, .row span { box-sizing: border-box; background: var(--well); border: solid;
+           border-width: calc(2 * var(--u)) var(--u) calc(2 * var(--u)) var(--u);
+           border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo); }
+  #well { padding: calc(2 * var(--u)); }
+  #mini { width: 100%; aspect-ratio: 1; cursor: pointer; display: block; }
+  .row { display: flex; gap: calc(3 * var(--u)); }
+  .row span { flex: 2; display: grid; place-items: center; color: var(--text);
+              text-shadow: var(--u) var(--u) 0 var(--shadow); }   /* "NW": white, like other text (grey on the well was 1.4:1) */
+
+  /* buttons */
+  .row button, .leaflet-bar a, .leaflet-bar a:first-child, .leaflet-bar a:last-child {
+    box-sizing: border-box; background: var(--btn); color: var(--text); font: inherit; cursor: pointer;
+    text-shadow: var(--u) var(--u) 0 var(--shadow); border: solid !important;
+    border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u) !important;
+    border-color: var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi) !important;
+    box-shadow: none; }
+  .row button { flex: 1; padding: calc(3 * var(--u)) var(--u) calc(4 * var(--u)); }
+  .row button:hover, .leaflet-bar a:hover { background: var(--btn-hover); color: var(--text); }
+  .row button:focus-visible, .leaflet-bar a:focus-visible { outline: var(--u) solid #f2c94c; outline-offset: var(--u); }
+  .row button:active, .row button[aria-pressed="true"], .leaflet-bar a:active {
+    background: var(--down); padding-top: calc(4 * var(--u)); padding-bottom: calc(3 * var(--u));
+    border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u) !important;
+    border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo) !important; }
+  .row button.turn { flex: 0 0 calc(20 * var(--u)); padding: calc(3 * var(--u)) 0 calc(4 * var(--u)); }
+  .row button.turn:active, .row button.turn[aria-pressed] { padding: calc(4 * var(--u)) 0 calc(3 * var(--u)); }
+  .turn svg { width: calc(10 * var(--u)); height: calc(10 * var(--u)); display: block; margin: 0 auto;
+              shape-rendering: crispEdges; filter: drop-shadow(var(--u) var(--u) 0 var(--shadow)); }
+  #right svg { transform: scaleX(-1); filter: drop-shadow(calc(-1 * var(--u)) var(--u) 0 var(--shadow)); }
+  #settings .row span { flex: 1; justify-items: start; padding-left: calc(4 * var(--u)); color: var(--text);
+                        text-shadow: var(--u) var(--u) 0 var(--shadow); }
+
+  /* Leaflet zoom buttons */
+  .leaflet-top.leaflet-left { top: 4px; left: 4px; }
+  .leaflet-bar { border: 0 !important; box-shadow: none !important; display: grid; gap: calc(3 * var(--u)); }
+  .leaflet-bar a, .leaflet-bar a:first-child, .leaflet-bar a:last-child {
+    width: calc(19 * var(--u)) !important; height: calc(19 * var(--u)) !important; display: grid !important;
+    place-items: center; line-height: 1 !important; padding-bottom: var(--u);
+    box-shadow: 0 0 0 var(--u) var(--edge); }
+  .leaflet-bar a:active { padding: var(--u) 0 0; }
+  .leaflet-bar a.leaflet-disabled { background: var(--btn); color: var(--dim); text-shadow: var(--u) var(--u) 0 var(--dim-shadow); }
+
+  /* map labels and markers, on the same pixel grid */
+  .leaflet-tooltip { background: var(--face); color: var(--text); font: inherit; padding: var(--u) calc(3 * var(--u)) calc(2 * var(--u));
+                     text-shadow: var(--u) var(--u) 0 var(--shadow); border: var(--u) solid;
+                     border-color: var(--face-hi) var(--face-lo) var(--face-lo) var(--face-hi);
+                     box-shadow: 0 0 0 var(--u) var(--edge); }
+  .leaflet-tooltip-top:before, .leaflet-tooltip-bottom:before, .leaflet-tooltip-left:before, .leaflet-tooltip-right:before { display: none; }
+  .spawn { background: #f2c94c; border: var(--u) solid #14161a; }
+  .place { background: none; border: 0; }
+  /* place names: white on a see-through black bar like a nametag in game; click one to glide there */
+  .place span { position: absolute; left: 50%; bottom: calc(3 * var(--u)); transform: translateX(-50%); white-space: nowrap;
+                font: inherit; color: #fff; background: rgba(0, 0, 0, .4); padding: 0 calc(2 * var(--u)) var(--u);
+                text-shadow: var(--u) var(--u) 0 var(--shadow); cursor: pointer; }
+  .place span:hover { background: rgba(0, 0, 0, .6); }
+  .place i { position: absolute; left: 50%; bottom: calc(-2 * var(--u)); width: calc(3 * var(--u)); height: calc(3 * var(--u));
+             margin-left: calc(-2 * var(--u)); background: #fff; border: var(--u) solid #000; }
+  /* live players: their skin's face (hat layer on top), one skin pixel = u, and their name in their locator bar colour */
+  .live { background: none; border: 0; }
+  .live span { position: absolute; left: 50%; bottom: calc(6 * var(--u)); transform: translateX(-50%); white-space: nowrap;
+               font: inherit; color: var(--c, #7cff6b);
+               /* a solid 1u outline: all 8 neighbours (diagonals alone leave gaps beside straight edges) */
+               text-shadow: var(--u) 0 0 #000, calc(-1 * var(--u)) 0 0 #000, 0 var(--u) 0 #000, 0 calc(-1 * var(--u)) 0 #000,
+                            var(--u) var(--u) 0 #000, calc(-1 * var(--u)) calc(-1 * var(--u)) 0 #000,
+                            var(--u) calc(-1 * var(--u)) 0 #000, calc(-1 * var(--u)) var(--u) 0 #000; pointer-events: none; }
+  .live b { position: absolute; left: 50%; bottom: calc(-5 * var(--u)); width: calc(8 * var(--u)); height: calc(8 * var(--u));
+            margin-left: calc(-5 * var(--u)); border: var(--u) solid #000; background-color: var(--c, #7cff6b);
+            background-repeat: no-repeat; background-size: calc(64 * var(--u)) auto;
+            background-position: calc(-8 * var(--u)) calc(-8 * var(--u)); image-rendering: pixelated; }
+  .live b::after { content: ""; position: absolute; inset: 0; background: inherit; background-color: transparent;
+                   background-position: calc(-40 * var(--u)) calc(-8 * var(--u)); }       /* the hat layer of the skin */
+  .minidot { background: var(--c, #7cff6b); border: var(--u) solid #000; }
+  /* a player's face: their skin's face with the hat layer, one skin pixel = u; their locator bar colour behind */
+  .face { flex: none; position: relative; box-sizing: content-box; width: calc(8 * var(--u)); height: calc(8 * var(--u));
+          border: var(--u) solid #000; background-color: var(--c, #8a8a8a); background-repeat: no-repeat;
+          background-size: calc(64 * var(--u)) auto; background-position: calc(-8 * var(--u)) calc(-8 * var(--u));
+          image-rendering: pixelated; }
+  .face::after { content: ""; position: absolute; inset: 0; background: inherit; background-color: transparent;
+                 background-position: calc(-40 * var(--u)) calc(-8 * var(--u)); }
+  /* ---- players (bottom left, above the coordinates): one line when closed; open, it grows upward into the list
+     of everyone who ever joined, or one player's card */
+  #players { left: 14px; bottom: calc(16px + 27 * var(--u)); padding: calc(3 * var(--u)) calc(4 * var(--u)) calc(4 * var(--u));
+             display: flex; flex-direction: column; gap: calc(3 * var(--u)); }
+  #players.open { width: calc(184 * var(--u)); max-width: calc(100vw - 28px); }
+  /* "Visitors": players who ever joined, an old-web hit counter: each digit in its own sunk slot; with live players,
+     click it for the list */
+  #visits { bottom: 16px; right: 14px; padding: calc(3 * var(--u)) calc(4 * var(--u)) calc(4 * var(--u));
+            display: grid; gap: calc(2 * var(--u)); justify-items: center; }
+  #visits .lbl { color: var(--dim); text-shadow: var(--u) var(--u) 0 var(--dim-shadow); }
+  #visits.click { cursor: pointer; }
+  #visits.click:hover .lbl { color: var(--text); text-shadow: var(--u) var(--u) 0 var(--shadow); }
+  #visits:focus-visible { outline: var(--u) solid #f2c94c; outline-offset: calc(2 * var(--u)); }
+  #prefs:not([hidden]) ~ #visits { bottom: 120px; }
+  /* ---- chat (bottom right, above Visitors): the last lines everyone in the game saw (chat.json next to
+     players.json, from the server's own script). Read only: nothing can be sent from here */
+  /* Drawn like the game's own chat and like the place names: white text on see-through black, no frame, so the map
+     shows through */
+  /* Always there (no open/close), and only while there's something to show: empty after a restart, it's hidden */
+  #chat { right: 14px; bottom: var(--chat-bottom, calc(16px + 40 * var(--u))); padding: 0;
+          background: none; border: 0; box-shadow: none; width: calc(220 * var(--u)); max-width: calc(100vw - 28px); }
+  /* placeChat() sets --chat-max to the room between Visitors and the side panel (and hides the chat, .away, when
+     there's too little, or when the open Players panel would cover it) */
+  #chat.away { display: none; }
+  #ch-list { max-height: var(--chat-max, calc(160 * var(--u)));
+             overflow-y: auto; box-sizing: border-box; background: rgba(0, 0, 0, .4);
+             padding: calc(3 * var(--u)) calc(4 * var(--u)) calc(2 * var(--u)); overflow-wrap: anywhere;
+             scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .35) transparent; }
+  /* two columns: the time (right-aligned, so the messages line up) and the message, which wraps under itself */
+  #ch-list p { margin: 0 0 calc(2 * var(--u)); color: #fff; text-shadow: var(--u) var(--u) 0 #3f3f3f; line-height: 1.25;
+               display: grid; grid-template-columns: 5ch 1fr; column-gap: calc(4 * var(--u)); }
+  #ch-list time { color: #9a9a9a; text-shadow: var(--u) var(--u) 0 #262626; text-align: right; align-self: baseline; }
+  #odo { display: flex; gap: var(--u); }
+  #odo i { font-style: normal; display: block; width: calc(8 * var(--u)); padding: var(--u) 0 calc(2 * var(--u));
+           text-align: center; background: #2e2828; color: var(--text); text-shadow: var(--u) var(--u) 0 #000;
+           border: solid; border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u);
+           border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo); }
+  #odo i.lead { color: #6a5f5f; text-shadow: none; }          /* the leading zeros, dimmed like an unlit wheel */
+  /* clicking a player on the map follows them */
+  .live b, .live span { cursor: pointer; }
+  .live span { pointer-events: auto; }
+  /* the followed player: 16 light blue pixels on a square ring around their face; a bright one steps round and the
+     ones it passed fade behind it. Each pixel runs the same blink, started 1/16 of a turn after the one before */
+  .live i.ring { display: none; position: absolute; left: 0; top: 0; pointer-events: none; }
+  .live.watched i.ring { display: block; }
+  .live.watched span { bottom: calc(11 * var(--u)); }     /* the name moves up clear of the ring */
+  .live i.ring u { position: absolute; width: calc(2 * var(--u)); height: calc(2 * var(--u)); background: #6ec8ff;
+                   opacity: 0; animation: ring 0.96s steps(1, end) infinite; }
+  @keyframes ring { 0% { opacity: 1; background: #e6f8ff; } 6.25% { opacity: .75; background: #6ec8ff; } 12.5% { opacity: .55; }
+                    18.75% { opacity: .38; } 25% { opacity: .24; } 31.25% { opacity: .12; } 37.5%, 100% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .live i.ring u { animation: none; opacity: .6; } }
+  #pl-head { order: 2; display: flex; gap: calc(6 * var(--u)); justify-content: space-between; align-items: baseline;
+             font: inherit; color: var(--text); background: none; border: 0; padding: 0; cursor: pointer;
+             text-shadow: var(--u) var(--u) 0 var(--shadow); white-space: nowrap; }
+  #pl-head .on { color: #6dff5a; text-shadow: var(--u) var(--u) 0 #1b3f16; }
+  #pl-head .all { color: var(--dim); text-shadow: var(--u) var(--u) 0 var(--dim-shadow); }
+  #pl-head:hover .all, #pl-head[aria-expanded="true"] .all { color: var(--text); text-shadow: var(--u) var(--u) 0 var(--shadow); }
+  #pl-head:focus-visible, #players button:focus-visible { outline: var(--u) solid #f2c94c; outline-offset: var(--u); }
+  #pl-body { order: 1; display: grid; gap: calc(3 * var(--u)); }
+  /* the list: a dark sunk well (like the old counter's wheels) so every name colour reads */
+  #pl-list { max-height: min(calc(220 * var(--u)), max(calc(60 * var(--u)), calc(100vh - 150 * var(--u) - 60px)));
+             overflow-y: auto; box-sizing: border-box; background: #2e2828; padding: calc(2 * var(--u));
+             border: solid; border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u);
+             border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo); }
+  #pl-list h2 { margin: calc(2 * var(--u)) calc(2 * var(--u)) var(--u); font: inherit; color: var(--dim);
+                text-shadow: var(--u) var(--u) 0 #000; }
+  #pl-list h2:first-child { margin-top: 0; }
+  #pl-list h2.sorted { display: flex; align-items: baseline; gap: calc(4 * var(--u)); }
+  #pl-list h2.sorted span { flex: 1; }
+  /* "Recent" / "Most played": how the Everyone list is ordered (remembered in this browser) */
+  #pl-list h2 button.sort { width: auto; flex: none; padding: 0 calc(2 * var(--u)); color: #f2c94c; }
+  #pl-list h2 button.sort:hover { background: #4a4242; }
+  #pl-list button { display: flex; align-items: center; gap: calc(4 * var(--u)); width: 100%; box-sizing: border-box;
+                    font: inherit; text-align: left; background: none; border: 0; cursor: pointer;
+                    padding: var(--u) calc(2 * var(--u)); color: var(--c, #e8e8e8); text-shadow: var(--u) var(--u) 0 #000; }
+  #pl-list button:hover { background: #4a4242; }
+  #pl-list .n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pl-list .r { flex: none; color: var(--dim); }
+  #pl-search { font: inherit; color: var(--text); background: #2e2828; box-sizing: border-box; width: 100%;
+                padding: var(--u) calc(3 * var(--u)) calc(2 * var(--u)); text-shadow: var(--u) var(--u) 0 #000;
+                border: solid; border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u);
+                border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo); outline: none; }
+  #pl-search::placeholder { color: #8a7f7f; }
+  #pl-search:focus { border-color: #f2c94c; }
+  /* a player's card */
+  #pl-card .who { display: flex; align-items: center; gap: calc(4 * var(--u)); margin-bottom: calc(3 * var(--u)); }
+  /* min-width 0 (on the card, a grid item, and on the name): a long name shrinks (ending in "…") instead of pushing
+     the Follow button out of the panel */
+  #pl-card { min-width: 0; }
+  /* the name in their colour with the black outline the names on the map have: many colours vanish on the grey */
+  #pl-card .who span { flex: 1; min-width: 0; color: var(--c, #e8e8e8); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+                       padding: var(--u);
+                       text-shadow: var(--u) 0 0 #000, calc(-1 * var(--u)) 0 0 #000, 0 var(--u) 0 #000, 0 calc(-1 * var(--u)) 0 #000,
+                                    var(--u) var(--u) 0 #000, calc(-1 * var(--u)) calc(-1 * var(--u)) 0 #000,
+                                    var(--u) calc(-1 * var(--u)) 0 #000, calc(-1 * var(--u)) var(--u) 0 #000; }
+  /* the card's buttons: the same look and press as the panel's other buttons (.row button), just smaller */
+  #players .btn { flex: none; font: inherit; color: var(--text); background: var(--btn); cursor: pointer;
+                  padding: 0 calc(3 * var(--u)) var(--u); text-shadow: var(--u) var(--u) 0 var(--shadow);
+                  border: solid; border-width: calc(2 * var(--u)) var(--u) var(--u) var(--u);
+                  border-color: var(--btn-hi) var(--btn-lo) var(--btn-lo) var(--btn-hi); }
+  #players .btn:hover { background: var(--btn-hover); }
+  #players .btn:active, #players .btn[aria-pressed="true"] {
+    background: var(--down); padding-top: var(--u); padding-bottom: 0;
+    border-color: var(--down-lo) var(--down-hi) var(--down-hi) var(--down-lo); }
+  #pl-card dl { margin: 0; display: grid; grid-template-columns: auto auto; gap: var(--u) calc(6 * var(--u)); }
+  #pl-card dt { color: var(--dim); text-shadow: var(--u) var(--u) 0 var(--dim-shadow); }
+  #pl-card dd { margin: 0; text-align: right; }
+  #pl-card dd.live { color: #6dff5a; text-shadow: var(--u) var(--u) 0 #1b3f16; }
+  /* the coordinates box: click it to copy them */
+  #coords { cursor: pointer; }
+  #coords:hover { background: var(--btn-hover); }
+  #coords:focus-visible { outline: var(--u) solid #f2c94c; outline-offset: var(--u); }
+  #coords.copied { color: #ffff55; text-shadow: var(--u) var(--u) 0 #3f3f15; }   /* the game's yellow */
+  /* touch screens have no mouse to point with: a cross marks the middle of the screen, and the coordinates box says
+     the block under it. One white plus with one dark outline around the whole shape (not around each bar, which
+     cut through the middle), on whole pixels so it stays sharp. */
+  #cross { position: absolute; left: 50%; top: 50%; left: round(down, 50%, 1px); top: round(down, 50%, 1px);
+           z-index: 500; pointer-events: none; width: 16px; height: 16px; margin: -8px 0 0 -8px; display: none;
+           background: linear-gradient(#fff, #fff) center / 2px 100% no-repeat,
+                       linear-gradient(#fff, #fff) center / 100% 2px no-repeat;
+           filter: drop-shadow(1px 0 0 rgba(0,0,0,.7)) drop-shadow(-1px 0 0 rgba(0,0,0,.7))
+                   drop-shadow(0 1px 0 rgba(0,0,0,.7)) drop-shadow(0 -1px 0 rgba(0,0,0,.7)); }
+  @media (hover: none) { #cross { display: block; } }
+  /* finger-sized targets on touch screens and small ones; the text stays the same size */
+  @media (hover: none), (max-width: 600px) {
+    #pl-head { padding: 7px 0; }
+    #pl-list button { min-height: 30px; }
+    #pl-list h2 button.sort { min-height: 26px; padding: 0 8px; }
+    #players .btn { min-width: 30px; min-height: 28px; }
+    /* 16 px: iPhones zoom the whole page into any smaller text box when it's tapped */
+    #pl-search { font-size: 16px; line-height: 20px; padding: 5px 8px 6px; }
+  }
+  @media (max-width: 600px), (max-height: 500px) {
+    #side { width: calc(152 * var(--u)); }
+    #prefs { width: calc(152 * var(--u)); }
+    #title { max-width: calc(100vw - 236px); }
+    /* finger-sized buttons; the art stays 1 px per screen pixel, they're just bigger boxes */
+    .leaflet-bar a, .leaflet-bar a:first-child, .leaflet-bar a:last-child { width: 32px !important; height: 32px !important; }
+    .row button { padding: 7px var(--u) 8px; }
+    .row button:active, .row button[aria-pressed="true"] { padding-top: 8px; padding-bottom: 7px; }
+    .row button.turn { flex-basis: 32px; padding: 9px 0 10px; }
+    .row button.turn:active, .row button.turn[aria-pressed] { padding: 10px 0 9px; }
+  }
+</style>
+<!-- your own changes, if you have any: custom.css and custom.js next to this page. beta_map.py never writes or
+     replaces them, so they survive updating beta-map and every redraw (see the README) -->
+<link rel="stylesheet" href="custom.css" onerror="this.remove()">
+</head>
+<body>
+<div id="map"></div>
+<div id="cross" aria-hidden="true"></div>
+<div id="title" class="panel"><h1 id="name">mc.goobabs.com</h1><p id="asof">Loading…</p><p id="next" hidden></p></div>
+<div id="side" class="panel">
+  <div id="well"><div id="mini" title="Click to go there"></div></div>
+  <div class="row" role="group" aria-label="World">
+    <button data-world="overworld">Overworld</button><button data-world="nether">Nether</button>
+  </div>
+  <div class="row">
+    <button id="left" class="turn" title="Turn left" aria-label="Turn left"></button><span id="facing" title="The direction the view faces"></span><button id="right" class="turn" title="Turn right" aria-label="Turn right"></button>
+  </div>
+</div>
+<!-- Settings: hidden, kept for later. Show it by removing "hidden"; options go in #settings as
+     <div class="row"><span>Name</span><button id="...">Off</button></div>, plus an entry in SWITCHES below -->
+<div id="prefs" class="panel" hidden>
+  <div id="settings" hidden></div>
+  <div class="row"><button id="gear" aria-expanded="false">Settings</button></div>
+</div>
+<div id="coords" class="panel">x –, z –</div>
+<!-- how many players have ever joined: everyone in the players list, or (no live players) beta_map.py's count of
+     the world's player files -->
+<div id="visits" class="panel" hidden><span class="lbl">Visitors</span><span id="odo" role="img"></span></div>
+<!-- players: everyone who ever joined (map.json "everyone" from the world's player files, and playtime.json from
+     livemap.lua), faces and colours (profiles.json), who's online and their stats (players.json from livemap.lua) -->
+<!-- chat: chat.json next to players.json, if the server writes one -->
+<div id="chat" class="panel" hidden>
+  <div id="ch-list" role="log" aria-label="Chat in the game (read only)"></div>
+</div>
+<div id="players" class="panel" hidden>
+  <button id="pl-head" aria-expanded="false" aria-controls="pl-body" title="Everyone who has played here"><span class="all">Players</span><span class="on" id="pl-on"></span></button>
+  <div id="pl-body" hidden>
+    <input id="pl-search" type="search" placeholder="Search" aria-label="Search players" autocomplete="off" spellcheck="false">
+    <div id="pl-list"></div>
+    <div id="pl-card" hidden>
+      <div class="who"><button class="btn" id="pl-back" title="Back to the list" aria-label="Back to the list">&lt;</button><b class="face"></b><span id="pl-name"></span><button class="btn" id="pl-follow">Follow</button></div>
+      <dl id="pl-stats"></dl>
+    </div>
+  </div>
+</div>
+<script src="leaflet.js"></script>
+<script>
+(async function () {
+  let m;
+  try { m = await (await fetch('map.json', { cache: 'no-store' })).json(); }
+  catch (e) { document.getElementById('asof').textContent = 'Not drawn yet'; return; }
+  const BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';   // see-through: the fog shows
+  // where the tiles are: map.json "tiles" (beta-map-draw keeps them in one folder between draws, so the draw's id goes
+  // on the end of each address and browsers don't show old ones); older map.json: tiles/<id>
+  const TILES = m.tiles || 'tiles/' + m.id, V = m.tiles ? '?v=' + encodeURIComponent(m.id) : '';
+  // drawn in one direction only (beta_map.py --views 1): no turn buttons
+  if (!m.layers.iso1) document.getElementById('left').parentElement.hidden = true;
+  if (m.title) document.getElementById('name').textContent = document.title = m.title;
+  // "Visitors" (bottom right): players who have ever joined, six digits, the leading zeros dimmed
+  function counter(n) {
+    const s = String(Math.max(0, Math.floor(n))).padStart(6, '0'), lead = s.search(/[1-9]|.$/);
+    const odo = document.getElementById('odo');
+    if (odo.dataset.n === s) return;
+    odo.dataset.n = s;
+    odo.replaceChildren(...[...s].map((c, i) => { const e = document.createElement('i'); e.textContent = c; if (i < lead) e.className = 'lead'; return e; }));
+    odo.setAttribute('aria-label', n + ' players have joined');
+    const vEl = document.getElementById('visits'); vEl.hidden = false;
+    if (!vEl.title) vEl.title = 'Players who have joined the server';   // ("Visitors" is the hit-counter look; it counts players)
+  }
+  if (Number.isFinite(m.players)) counter(m.players);
+  // when the world was last saved: map.json has it in UTC, shown in the viewer's own time zone
+  // ("Map from ...": a date alone didn't say what it was. The time zone only where there's room for it.)
+  const d = new Date(m.taken.replace(' ', 'T') + ':00Z'), roomy = innerWidth > 600;
+  document.getElementById('asof').textContent = (roomy ? 'Map from ' : 'Map: ') +
+    d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', ...(roomy ? { timeZoneName: 'short' } : {}) });
+
+  // When the map is next redrawn (only with --every): map.json "next" is {"every": hours, "first": hours after
+  // midnight UTC of the day's first redraw}. Worked out from the clock, not asked of anything: for the first 10
+  // minutes after each redraw time it says the new map is on its way.
+  if (m.next && m.next.every > 0) {
+    const nextEl = document.getElementById('next');
+    const nextDraw = () => {
+      const now = Date.now(), H = 3600e3, slot = m.next.every * H, off = (m.next.first || 0) * H;
+      const last = Math.floor((now - off) / slot) * slot + off;
+      if (now - last < 10 * 60e3) nextEl.textContent = 'Updating now, refresh soon';
+      else {
+        const t = new Date(last + slot), mins = Math.ceil((t - now) / 60e3);
+        const left = mins >= 60 ? Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm' : mins + 'm';
+        nextEl.textContent = roomy ? 'Next update ' + t.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' }) + ' (in ' + left + ')'
+          : 'Next update in ' + left;
+      }
+      nextEl.hidden = false;
+    };
+    nextDraw(); setInterval(nextDraw, 30000);
+  }
+
+  // Main view: 3D (see beta_map.py). View k is the world turned k quarter turns, (x, z) -> (-z, x) each, then drawn
+  // from the south-east: block (x', z') at height y is a 4 px cube at screen x = 2(x' - z'), y = (x' + z') - 2y.
+  // Heights come from the height tiles (red = top block's height, green = there's a column), so positions are exact.
+  // Minimap: the same world top-down, north up, 1 px per block.
+  const WORLDS = {
+    overworld: { iso: 'iso', mini: 'flat', height: 'height', ground: 66 },
+    nether:    { iso: 'nether-iso', mini: 'nether', height: 'nether-height', ground: 45 },
+  };
+  const FACING = ['NW', 'SW', 'SE', 'NE'];
+  let world = null, rot = 0;
+  const turn = (x, z, k) => { for (let i = 0; i < k; i++) [x, z] = [-z, x]; return [x, z]; };
+  const unturn = (x, z, k) => { for (let i = 0; i < k; i++) [x, z] = [z, -x]; return [x, z]; };
+
+  // ---- heights
+  const H = {};                                         // "world/rx_rz" -> Uint8ClampedArray (RGBA) or null
+  function heightAt(x, z) {                             // number, null (no column), or undefined (still loading)
+    const key = world + '/' + (x >> 9) + '_' + (z >> 9);
+    if (!(key in H)) { loadHeights(key, x >> 9, z >> 9); return undefined; }
+    const t = H[key];
+    if (t === undefined) return undefined;
+    if (t === null) return null;
+    const i = 4 * (((z & 511) << 9) + (x & 511));
+    return t[i + 1] ? t[i] : null;
+  }
+  const waiting = {};
+  function loadHeights(key, rx, rz) {
+    H[key] = undefined;
+    return waiting[key] = new Promise(done => {
+      const img = new Image();
+      img.onload = () => {
+        const c = document.createElement('canvas'); c.width = c.height = 512;
+        const g = c.getContext('2d', { willReadFrequently: true }); g.drawImage(img, 0, 0);
+        H[key] = g.getImageData(0, 0, 512, 512).data; done(); loaded();
+      };
+      img.onerror = () => { H[key] = null; done(); loaded(); };
+      img.src = TILES + '/' + WORLDS[world].height + '/0/' + rx + '_' + rz + '.png' + V;
+    });
+  }
+  async function heightNow(x, z) {
+    const key = world + '/' + (x >> 9) + '_' + (z >> 9);
+    if (!(key in H)) loadHeights(key, x >> 9, z >> 9);
+    if (H[key] === undefined) await waiting[key];
+    const h = heightAt(x, z);
+    return h == null ? WORLDS[world].ground : h;
+  }
+
+  // ---- block <-> map position
+  function toLL(x, z, y) {                              // the top of block (x, y, z)
+    const [a, b] = turn(x + .5, z + .5, rot);
+    return L.latLng(-((a + b) - 2 * y), 2 * (a - b) + 2);
+  }
+  function guess(p, y) {                                // map position -> (x, z), if the ground there is at y
+    const s = -p.lat + 2 * y, dd = (p.lng - 2) / 2;
+    return unturn((s + dd) / 2, (s - dd) / 2, rot);
+  }
+  function pick(p) {                                    // map position -> [x, z, y] of the block seen there
+    for (let y = 127; y >= 0; y--) {
+      const [x, z] = guess(p, y).map(Math.floor);
+      const h = heightAt(x, z);
+      if (h === undefined) return undefined;
+      if (h !== null && h >= y) return [x, z, y];
+    }
+    return null;
+  }
+  const flatLL = (x, z) => L.latLng(-z, x);
+  const boundsOf = b => b && L.latLngBounds(L.latLng(-b[1], b[0]), L.latLng(-b[3], b[2]));
+  const layerOf = (name, extra) => L.tileLayer(TILES + '/' + name + '/{z}/{x}_{y}.png' + V, Object.assign({
+    tileSize: m.tile, minNativeZoom: m.minZoom, maxNativeZoom: 0, noWrap: true,
+    bounds: boundsOf(m.layers[name] && m.layers[name].bounds), errorTileUrl: BLANK, keepBuffer: 4 }, extra));
+
+  const map = L.map('map', { crs: L.CRS.Simple, minZoom: m.minZoom, maxZoom: 3, zoomSnap: 1, attributionControl: false });
+  const MINI_OUT = 3;                                  // the minimap goes this much further out than the tiles
+  const mini = L.map('mini', { crs: L.CRS.Simple, minZoom: m.minZoom - MINI_OUT, maxZoom: 2, zoomControl: false, attributionControl: false,
+    dragging: false, scrollWheelZoom: false, doubleClickZoom: false, boxZoom: false, keyboard: false, touchZoom: false });
+  let main = null, small = null, outline = null, marks = L.layerGroup().addTo(map);
+
+  // ---- settings (remembered in this browser only)
+  const NONE = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';   // see-through
+  const prefs = {};
+  try { Object.assign(prefs, JSON.parse(localStorage.getItem('mapPrefs') || '{}')); } catch (e) { /* defaults */ }
+  prefs.torches = true;    // torches always shown
+  const savePrefs = () => { try { localStorage.setItem('mapPrefs', JSON.stringify(prefs)); } catch (e) { /* fine */ } };
+  // torches: their own see-through tiles over the main view (beta_map.py), only at zoom 0 and in: only the tiles that
+  // have one exist, listed in map.json
+  let torchLayer = null;
+  const TorchLayer = L.TileLayer.extend({
+    getTileUrl(c) { return this.options.have.has(c.x + ',' + c.y) ? L.TileLayer.prototype.getTileUrl.call(this, c) : NONE; }
+  });
+  function drawTorches() {
+    if (torchLayer) { torchLayer.remove(); torchLayer = null; }
+    const name = WORLDS[world].iso + rot + '-torches', info = m.layers[name];
+    if (!prefs.torches || !info || !info.list) return;
+    torchLayer = new TorchLayer(TILES + '/' + name + '/{z}/{x}_{y}.png' + V, { tileSize: m.tile,
+      minZoom: 0, maxZoom: 3, minNativeZoom: 0, maxNativeZoom: 0, noWrap: true, errorTileUrl: NONE, keepBuffer: 4,
+      have: new Set(info.list) }).addTo(map);
+  }
+  // on/off switches in #settings: SWITCHES maps a button id to its pref and what to redo when it changes
+  const SWITCHES = {};                                  // e.g. torches: () => { if (world) drawTorches(); }
+  function showPrefs() {
+    for (const id in SWITCHES) {
+      const b = document.getElementById(id); if (!b) continue;
+      b.setAttribute('aria-pressed', !!prefs[id]); b.textContent = prefs[id] ? 'On' : 'Off';
+    }
+  }
+  for (const id in SWITCHES) {
+    const b = document.getElementById(id);
+    if (b) b.onclick = () => { prefs[id] = !prefs[id]; savePrefs(); showPrefs(); SWITCHES[id](); };
+  }
+  document.getElementById('gear').onclick = e => {
+    const s = document.getElementById('settings'); s.hidden = !s.hidden;
+    e.currentTarget.setAttribute('aria-expanded', !s.hidden); e.currentTarget.setAttribute('aria-pressed', !s.hidden);
+  };
+  showPrefs();
+  // turn buttons: a blocky round arrow (10 x 10 pixels) to match the font; the right one is the same, mirrored
+  const ARROW = [[4,2],[5,2],[6,2],[7,3],[8,4],[8,5],[8,6],[8,7],[7,8],[6,9],[5,9],[4,9],[3,9],[2,8],[1,7],[1,6],[1,5],
+                 [2,2],[3,2],[3,1],[4,0],[3,3],[4,4]];
+  const arrowSvg = '<svg viewBox="0 0 10 10" aria-hidden="true">' +
+    ARROW.map(([x, y]) => '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="currentColor"/>').join('') + '</svg>';
+  document.querySelectorAll('.turn').forEach(b => b.innerHTML = arrowSvg);
+  let target = null, targetLL = null;                   // where show() put the view, until the heights are in
+  let last = null, soon = 0;
+  const coords = document.getElementById('coords');
+
+  async function show(w, x, z, zoom, k) {
+    if (!WORLDS[w] || !m.layers[WORLDS[w].iso + '0']) w = 'overworld';
+    const newWorld = w !== world;
+    if (newWorld) miniY = null;
+    world = w; rot = ((k % 4) + 4) % 4;
+    document.documentElement.style.setProperty('--void', w === 'nether' ? '#330808' : '#c0d8ff');   // the game's fog
+    if (!m.layers[WORLDS[w].iso + rot]) rot = 0;             // drawn with fewer directions (--views)
+    x = Math.floor(x); z = Math.floor(z);
+    const y = await heightNow(x, z);
+    if (main) main.remove();
+    main = layerOf(WORLDS[w].iso + rot, { minZoom: m.minZoom, maxZoom: 3 }).addTo(map);
+    drawTorches();
+    if (newWorld || !small) { if (small) small.remove(); small = layerOf(WORLDS[w].mini, { minZoom: m.minZoom - MINI_OUT, maxZoom: 2 }).addTo(mini); }
+    map.setView(toLL(x, z, y), zoom, { animate: false });   // a jump: the center is right at once
+    target = [x, z]; targetLL = map.getCenter();
+    marks.clearLayers();
+    if (w === 'overworld' && m.spawn)
+      L.marker(toLL(m.spawn[0], m.spawn[1], m.spawnY ?? WORLDS[w].ground), { icon: L.divIcon({ className: 'spawn', iconSize: [10, 10] }) })
+        .bindTooltip('Spawn ' + m.spawn[0] + ', ' + m.spawn[1], { direction: 'bottom', offset: [0, 6] }).addTo(marks);
+    for (const p of m.places || []) {
+      if (p.world !== w || (p.name === 'Spawn' && m.spawn)) continue;
+      const mk = L.marker(toLL(p.x, p.z, p.y ?? WORLDS[w].ground), { keyboard: false,
+        icon: L.divIcon({ className: 'place', iconSize: [0, 0], html: '<i></i><span></span>' }) })
+        .bindTooltip(p.x + ', ' + p.z, { direction: 'bottom', offset: [0, 6] }).addTo(marks);   // under the dot: the name is above it already
+      mk.getElement().querySelector('span').textContent = p.name;
+      mk.on('click', () => {                            // click the name or the dot: glide there, a step closer (at least zoom 1)
+        unwatch();
+        target = [p.x, p.z]; targetLL = toLL(p.x, p.z, p.y ?? WORLDS[w].ground);
+        map.flyTo(targetLL, Math.max(1, Math.min(3, map.getZoom() + 1)), { duration: 0.8 });
+        map.once('moveend', () => { targetLL = map.getCenter(); });
+      });
+    }
+    document.querySelectorAll('[data-world]').forEach(b => b.setAttribute('aria-pressed', b.dataset.world === w));
+    document.getElementById('facing').textContent = FACING[rot];
+    drawLive(true);
+    follow(); save();
+  }
+
+  // ---- live players (optional): map.json "live" is the URL of a players.json, asked every 2 s while the page is
+  // open and visible: {"time": unix seconds, "players": [{"name", "x", "y", "z", "world": "overworld"|"nether"}]}
+  // (extras/livemap.lua writes it on Betrock++). An optional profiles.json next to it gives each player a skin
+  // (a textures.minecraft.net URL) and a colour: {"Name": {"skin": URL, "colour": "#rrggbb"}}. Each dot glides from where it was to the new position over the next 2 s: worked out in
+  // world coordinates and turned into a map position every frame, so zooming and turning never fight it.
+  // A player's feet are on the top of the block under them.
+  const liveMarks = L.layerGroup().addTo(map), miniDots = L.layerGroup().addTo(mini);
+  const live = {};                                      // name -> { mk, mini, world, from, to, t0 }
+  let profiles = {}, profilesAt = 0, zooming = false, liveOff = false;   // liveOff: players.json old or unreachable
+  const GLIDE = 2000;
+  function toLLf(xf, zf, feet) {
+    const [a, b] = turn(xf, zf, rot);
+    return L.latLng(-((a + b) - 2 * (feet - 1)), 2 * (a - b) + 2);
+  }
+  function now3(e, t) {                                 // where a dot is at time t
+    const k = Math.min(1, (t - e.t0) / GLIDE);
+    return e.from.map((v, i) => v + (e.to[i] - v) * k);
+  }
+  function styleOf(name, el) {                          // face and colour, once profiles.json knows them
+    const pr = profiles[name] || {};
+    const col = /^#[0-9a-f]{6}$/i.test(pr.colour || '') ? pr.colour : null;
+    const skin = /^https:\/\/textures\.minecraft\.net\/texture\/[0-9a-f]+$/i.test(pr.skin || '') ? pr.skin : null;
+    if (col) el.style.setProperty('--c', col);
+    const face = el.querySelector('b');
+    if (face) face.style.backgroundImage = skin ? 'url("' + skin + '")' : 'none';
+  }
+  const U = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--u')) || 2;   // px per pixel
+  function tipTo(e, x, y, z) {
+    const c = Math.floor(x) + ', ' + Math.floor(y) + ', ' + Math.floor(z);
+    if (e.tip !== c) { e.tip = c; e.mk.setTooltipContent(c); }
+  }
+  function place() {                                    // every frame: the dots of the world shown
+    const t = performance.now();
+    for (const e of Object.values(live)) {
+      const [x, y, z] = now3(e, t), here = e.world === world;
+      if (here && !zooming) e.mk.setLatLng(toLLf(x, z, y));
+      if (here) e.mini.setLatLng(flatLL(x, z));
+      const el = e.shown && e.mk.getElement();
+      if (el) el.classList.toggle('watched', e.name === watching);
+      if (here && e.mk.isTooltipOpen()) tipTo(e, x, y, z);   // the hover box follows their coordinates
+      if (here !== e.shown) {
+        e.shown = here;
+        if (here) { e.mk.addTo(liveMarks); e.mini.addTo(miniDots); styleOf(e.name, e.mk.getElement()); styleOf(e.name, e.mini.getElement()); }
+        else { liveMarks.removeLayer(e.mk); miniDots.removeLayer(e.mini); }
+      }
+    }
+    if (watching) keepOn(t);
+    requestAnimationFrame(place);
+  }
+  function drawLive() {                                 // after a world change or turn: dots of the new view at once
+    if (!world) return;
+    for (const e of Object.values(live)) e.shown = null;
+    liveMarks.clearLayers(); miniDots.clearLayers();
+  }
+  function update(players) {
+    const t = performance.now(), seen = new Set();
+    for (const p of players) {
+      seen.add(p.name);
+      const pos = [p.x, p.y, p.z];
+      let e = live[p.name];
+      if (!e) {
+        e = live[p.name] = { name: p.name, world: p.world, from: pos, to: pos, t0: t, shown: null,
+          mk: L.marker([0, 0], { keyboard: false, zIndexOffset: 1000,
+            icon: L.divIcon({ className: 'live', iconSize: [0, 0], html: '<b></b>' + RING + '<span></span>' }) })
+            // hover box: where they are, under the face (the name tag above says who)
+            .bindTooltip('', { direction: 'bottom', offset: [0, 11 * U()] }),
+          mini: L.marker([0, 0], { interactive: false, keyboard: false, icon: L.divIcon({ className: 'minidot', iconSize: [6, 6] }) }) };
+        e.mk.on('tooltipopen', () => tipTo(e, ...now3(e, performance.now())));
+        e.mk.on('add', () => { e.mk.getElement().querySelector('span').textContent = p.name; styleOf(p.name, e.mk.getElement()); });
+        e.mini.on('add', () => styleOf(p.name, e.mini.getElement()));
+        e.mk.on('click', () => watch(p.name));
+        e.p = p;
+        continue;
+      }
+      const cur = now3(e, t), far = Math.hypot(pos[0] - cur[0], pos[2] - cur[2]) > 64;
+      if (p.world !== e.world || far) { e.from = pos; e.world = p.world; e.shown = null; }   // portal or teleport: jump
+      else e.from = cur;
+      if (p.name === watching && p.world !== world) show(p.world, p.x, p.z, map.getZoom(), rot);   // take the view along
+      e.p = p;
+      e.to = pos; e.t0 = t;
+    }
+    for (const n of Object.keys(live)) if (!seen.has(n)) {
+      if (n === watching) unwatch();
+      liveMarks.removeLayer(live[n].mk); miniDots.removeLayer(live[n].mini); delete live[n];
+    }
+  }
+  async function poll() {
+    if (!m.live || document.visibilityState === 'hidden') return;
+    let players = [];
+    try {
+      const r = await fetch(m.live, { cache: 'no-store' });
+      const d = await r.json();
+      players = (d.players || []).filter(p => typeof p.name === 'string' && isFinite(p.x) && isFinite(p.y) && isFinite(p.z));
+      const old = Date.now() / 1000 - d.time > 30;      // the server isn't writing: down or restarting
+      if (old) players = [];
+      liveOff = old;                                    // the Players header and the chat say so
+      if (players.some(p => !profiles[p.name]) && Date.now() - profilesAt > 10000 || Date.now() - profilesAt > 300000) {
+        profilesAt = Date.now();
+        try {
+          profiles = await (await fetch(m.live.replace(/players\.json$/, 'profiles.json'), { cache: 'no-store' })).json() || {};
+          for (const e of Object.values(live)) if (e.shown) { styleOf(e.name, e.mk.getElement()); styleOf(e.name, e.mini.getElement()); }
+        } catch (e) { /* no skins or colours yet: plain dots */ }
+      }
+    } catch (e) {                                       // the live file isn't reachable: just no dots
+      liveOff = true;
+    }
+    update(players);
+    drawPanel();
+  }
+
+  // ---- the follow ring's 16 pixels: spots 4u apart on a square 8u out from the middle of the face, clockwise from
+  // the top left; pixel i blinks i/16 of a turn after pixel 0 (a negative delay, so it's already turning when shown)
+  const RING = (() => {
+    const spots = [];
+    for (let i = -8; i < 8; i += 4) spots.push([i, -8]);
+    for (let i = -8; i < 8; i += 4) spots.push([8, i]);
+    for (let i = 8; i > -8; i -= 4) spots.push([i, 8]);
+    for (let i = 8; i > -8; i -= 4) spots.push([-8, i]);
+    return '<i class="ring">' + spots.map(([x, y], i) =>
+      '<u style="left:calc(' + (x - 1) + ' * var(--u));top:calc(' + (y - 1) + ' * var(--u));animation-delay:' +
+      (-(spots.length - i) * 0.06).toFixed(2) + 's"></u>').join('') + '</i>';
+  })();
+
+  // ---- players (bottom left). Closed: "● 3 online  156 players". Open, it grows upward into a list of everyone who
+  // ever joined: who's online first, then everyone else by play time, each with their skin's face and locator bar
+  // colour. A name opens their card: first join, play time, last online, and for someone online this session's
+  // stats (livemap.lua). Clicking someone online (in the list or on the map) also follows them: the view glides to
+  // them and stays on them (zoom keeps them in the middle, a portal takes the view along). Dragging the map, the
+  // minimap, a world button or the Follow button stops following; the card stays. Esc or the bottom line closes it.
+  let watching = null, watchFrom = null, watchT0 = 0, carded = null, ptime = null, ptimeAt = 0;
+  const ZOOMS = ['scrollWheelZoom', 'doubleClickZoom', 'touchZoom'], lastSeen = {};
+  const $ = id => document.getElementById(id);
+  const panel = $('players'), head = $('pl-head'), body = $('pl-body'), listEl = $('pl-list'), card = $('pl-card');
+  async function playtime() {                            // livemap.lua writes it every minute
+    if (document.visibilityState === 'hidden' && ptime) return;
+    try {
+      const d = await (await fetch(m.live.replace(/players\.json$/, 'playtime.json'), { cache: 'no-store' })).json();
+      const t = {};
+      for (const q of d.players || []) if (typeof q.name === 'string') t[q.name.toLowerCase()] = q;
+      // "merged": old names the server counts as another player (a renamed account): not listed on their own
+      const merged = new Set((Array.isArray(d.merged) ? d.merged : []).filter(n => typeof n === 'string').map(n => n.toLowerCase()));
+      for (const n of m.everyone || []) if (typeof n === 'string' && !t[n.toLowerCase()] && !merged.has(n.toLowerCase())) t[n.toLowerCase()] = { name: n };
+      ptime = t; ptimeAt = Date.now(); drawPanel();
+    } catch (e) {                                       // not there (an older livemap.lua): the world's names
+      if (!ptime) { ptime = {}; for (const n of m.everyone || []) if (typeof n === 'string') ptime[n.toLowerCase()] = { name: n }; ptimeAt = Date.now(); drawPanel(); }
+    }
+  }
+  const hours = s => s < 3600 ? Math.round(s / 60) + 'm' : Math.floor(s / 3600) + 'h ' + Math.floor(s % 3600 / 60) + 'm';
+  const utc = f => new Date(f.replace(' ', 'T') + ':00Z');
+  const joinedOn = f => utc(f).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  function ago(sec) {
+    const mins = Math.floor(sec / 60);
+    return mins < 1 ? 'just now' : mins < 60 ? mins + 'm' : Math.floor(mins / 60) + 'h ' + (mins % 60) + 'm';
+  }
+  function agoLong(ms) {
+    const d = Math.floor((Date.now() - ms) / 86400e3);
+    return d < 1 ? ago((Date.now() - ms) / 1000) + (Date.now() - ms < 60e3 ? '' : ' ago') : d === 1 ? 'yesterday' : d < 30 ? d + ' days ago' :
+      new Date(ms).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  }
+  function shortAgo(ms) {                               // for the list's right column: "12m ago", "3h ago", "5d ago"
+    const s = Math.max(0, (Date.now() - ms) / 1000);
+    return s < 3600 ? Math.max(1, Math.floor(s / 60)) + 'm ago' : s < 86400 ? Math.floor(s / 3600) + 'h ago' :
+      s < 60 * 86400 ? Math.floor(s / 86400) + 'd ago' : s < 365 * 86400 ? Math.floor(s / (30 * 86400)) + 'mo ago' :
+      Math.floor(s / (365 * 86400)) + 'y ago';                                   // a year on: "1y ago", "2y ago"
+  }
+  const liveName = n =>Object.keys(live).find(k => k.toLowerCase() === n.toLowerCase());
+  const known = n => ptime && ptime[n.toLowerCase()];
+
+  let onPanelChange = () => {};                          // the chat moves out of the way (set further down)
+  function openPanel(on) {
+    body.hidden = !on; panel.classList.toggle('open', on); head.setAttribute('aria-expanded', on);
+    if (!on) { carded = null; unwatch(); }
+    listEl.dataset.key = ''; drawPanel(); onPanelChange();
+  }
+  function showCard(name) {
+    carded = name; body.hidden = false; panel.classList.add('open'); head.setAttribute('aria-expanded', true);
+    drawPanel(); onPanelChange();
+  }
+  function watch(name) {
+    const e = live[name];
+    if (!e) return;
+    showCard(name);
+    watching = name; watchFrom = map.getCenter(); watchT0 = performance.now(); wantFollow = null;
+    history.replaceState(null, '', '#follow=' + encodeURIComponent(name));
+    for (const o of ZOOMS) map.options[o] = 'center';             // zoom around them, not around the mouse
+    if (e.world !== world) { const [x, , z] = now3(e, performance.now()); show(e.world, x, z, map.getZoom(), rot); }
+    drawPanel();
+  }
+  let wantFollow = null;                                 // from a #follow=NAME link: follow them once they're online
+  function unwatch() {
+    wantFollow = null;
+    if (!watching) return;
+    watching = null;
+    for (const o of ZOOMS) map.options[o] = true;
+    save(); drawPanel();
+  }
+  function keepOn(t) {                                   // every frame while following: center on them
+    const e = live[watching];
+    if (!e || e.world !== world || zooming) return;
+    const [x, y, z] = now3(e, t);
+    let ll = toLLf(x, z, y);
+    const k = Math.min(1, (t - watchT0) / 500);
+    if (k < 1) { const s = k * (2 - k); ll = L.latLng(watchFrom.lat + (ll.lat - watchFrom.lat) * s, watchFrom.lng + (ll.lng - watchFrom.lng) * s); }
+    const c = map.getCenter();
+    if (Math.abs(c.lat - ll.lat) + Math.abs(c.lng - ll.lng) > 0.01) map.setView(ll, map.getZoom(), { animate: false });
+  }
+  function styled(el, name) {                            // face and colour from profiles.json, if it has them
+    const pr = profiles[name] || {};
+    if (/^#[0-9a-f]{6}$/i.test(pr.colour || '')) el.style.setProperty('--c', pr.colour); else el.style.removeProperty('--c');
+    const face = el.querySelector('.face');
+    const skin = /^https:\/\/textures\.minecraft\.net\/texture\/[0-9a-f]+$/i.test(pr.skin || '') ? pr.skin : null;
+    if (face) face.style.backgroundImage = skin ? 'url("' + skin + '")' : 'none';
+  }
+  function drawPanel() {
+    if (!m.live) return;
+    const online = Object.keys(live).filter(n => live[n].p);
+    if (wantFollow) { const ln = liveName(wantFollow); if (ln) { wantFollow = null; watch(ln); return; } }
+    for (const n of online) lastSeen[n.toLowerCase()] = Date.now();
+    // "Server offline" when the live file is old or unreachable
+    const onEl = $('pl-on');
+    onEl.textContent = liveOff ? 'Server offline' : '● ' + online.length + ' online';
+    panel.hidden = false;
+    if (ptime) {                                         // the counter: how many have ever joined
+      counter(Math.max(Object.keys(ptime).length, Number.isFinite(m.players) ? m.players : 0));
+    }
+    if (body.hidden) return;
+    if (carded) drawCard(); else drawList(online);
+  }
+  function drawList(online) {
+    card.hidden = true; listEl.hidden = false; $('pl-search').hidden = false;
+    // rebuilt only when something in it changes: a row swapped mid-click would lose the click
+    const find = $('pl-search').value.trim().toLowerCase(), hit = n => !find || n.toLowerCase().includes(find);
+    const recent = prefs.sort !== 'played';             // default: most recently online first
+    const key = [online.join(','), ptimeAt, profilesAt, find, recent].join('|');
+    if (listEl.dataset.key === key) return;
+    listEl.dataset.key = key;
+    const row = (name, right, isOn) => {
+      const b = document.createElement('button');
+      b.innerHTML = '<b class="face"></b><span class="n"></span><span class="r"></span>';
+      b.querySelector('.n').textContent = name; b.querySelector('.r').textContent = right;
+      b.title = isOn ? 'Follow ' + name : name;
+      styled(b, name);
+      b.onclick = () => isOn ? watch(name) : showCard(name);
+      return b;
+    };
+    const head2 = t => Object.assign(document.createElement('h2'), { textContent: t });
+    const out = [];
+    const onLower = new Set(online.map(n => n.toLowerCase()));
+    const onShown = online.filter(hit);
+    if (onShown.length) {
+      out.push(head2('Online'));
+      for (const n of [...onShown].sort((a, b) => ((known(b) || {}).secs || 0) - ((known(a) || {}).secs || 0)))
+        out.push(row(n, known(n) && known(n).secs ? hours(known(n).secs) : '', true));
+    }
+    if (ptime) {
+      const rest = Object.values(ptime).filter(q => !onLower.has(q.name.toLowerCase()) && hit(q.name));
+      if (rest.length) {
+        // "Everyone", with a switch: Recent (last online, newest first) or Most played (play time)
+        const h = head2(''); h.className = 'sorted';
+        h.append(Object.assign(document.createElement('span'), { textContent: 'Everyone' }));
+        const s = Object.assign(document.createElement('button'), { className: 'sort', textContent: recent ? 'Recent' : 'Most played' });
+        s.title = recent ? 'Sorted by last online. Click to sort by play time' : 'Sorted by play time. Click to sort by last online';
+        s.onclick = () => { prefs.sort = recent ? 'played' : 'recent'; savePrefs(); drawPanel(); };
+        h.append(s); out.push(h);
+      } else if (!onShown.length) out.push(head2('No one called "' + find + '"'));
+      const seenAt = q => Math.max(q.last ? utc(q.last).getTime() || 0 : 0, lastSeen[q.name.toLowerCase()] || 0);
+      const bySecs = (a, b) => (b.secs || 0) - (a.secs || 0) || a.name.localeCompare(b.name);
+      for (const q of rest.sort(recent ? (a, b) => seenAt(b) - seenAt(a) || bySecs(a, b) : bySecs))
+        out.push(row(q.name, recent ? (seenAt(q) ? shortAgo(seenAt(q)) : '') : (q.secs ? hours(q.secs) : ''), false));
+    } else out.push(head2('Loading…'));
+    listEl.replaceChildren(...out);
+  }
+  function drawCard() {
+    listEl.hidden = true; card.hidden = false; listEl.dataset.key = ''; $('pl-search').hidden = true;
+    const ln = liveName(carded), e = ln && live[ln], p = e && e.p, q = known(carded);
+    const name = ln || (q && q.name) || carded;
+    $('pl-name').textContent = name;
+    styled(card.querySelector('.who'), name);
+    const f = $('pl-follow');
+    f.hidden = !p;
+    f.textContent = watching === ln ? 'Following' : 'Follow';
+    f.setAttribute('aria-pressed', watching === ln);
+    const rows = [];
+    if (p) {
+      rows.push(['Status', 'Online', 'live'], ['World', p.world === 'nether' ? 'Nether' : 'Overworld'],
+        ['Position', Math.floor(p.x) + ', ' + Math.floor(p.y) + ', ' + Math.floor(p.z)]);
+      if (isFinite(p.joined)) rows.push(['Online for', ago(Date.now() / 1000 - p.joined)]);
+    }
+    // lifetime totals: live while they're online (players.json), else from the player list (playtime.json, 5-min old)
+    const t = p || q || {};
+    if (isFinite(t.walked)) rows.push(['Walked', t.walked.toLocaleString() + ' blocks']);
+    if (isFinite(t.mined)) rows.push(['Mined', t.mined.toLocaleString()]);
+    if (isFinite(t.placed)) rows.push(['Placed', t.placed.toLocaleString()]);
+    if (q && q.first) rows.push(['First joined', joinedOn(q.first)]);
+    if (q && q.secs) rows.push(['Playtime', hours(q.secs)]);
+    if (!p) {
+      const seen = Math.max(q && q.last ? utc(q.last).getTime() : 0, lastSeen[name.toLowerCase()] || 0);
+      if (seen) rows.push(['Last online', agoLong(seen)]);
+    }
+    if (!rows.length) rows.push(['Stats', 'none yet']);  // only in the world's player files: here before livemap.lua
+    $('pl-stats').replaceChildren(...rows.flatMap(([k, v, cls]) => {
+      const dt = document.createElement('dt'), dd = document.createElement('dd');
+      dt.textContent = k; dd.textContent = v; if (cls) dd.className = cls; return [dt, dd];
+    }));
+  }
+  head.onclick = () => openPanel(body.hidden);
+  $('pl-search').oninput = () => drawPanel();
+  if (m.live) {                                          // the counter opens the list
+    const v = $('visits');
+    v.classList.add('click'); v.tabIndex = 0; v.setAttribute('role', 'button'); v.title = 'Players who have joined the server. Click to see them all';
+    v.onclick = () => { carded = null; openPanel(true); };
+    v.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); v.click(); } };
+  }
+  $('pl-back').onclick = () => { unwatch(); carded = null; listEl.dataset.key = ''; drawPanel(); };
+  $('pl-follow').onclick = () => { const ln = liveName(carded); if (watching === ln) unwatch(); else if (ln) watch(ln); };
+  document.addEventListener('keydown', ev => {
+    if (ev.key !== 'Escape' || body.hidden) return;
+    if (ev.target === $('pl-search') && $('pl-search').value) { $('pl-search').value = ''; drawPanel(); return; }
+    openPanel(false);
+  });
+  setInterval(drawPanel, 15000);                         // "Online for" and "Last online" between polls
+
+  // the block at the middle of the screen: exact once the heights along the way are in; until then where show() put
+  // the view (if it hasn't moved since), else a guess at the usual ground height
+  function center(exactOnly) {
+    const c = map.getCenter();
+    // the view is where show() (a link, a place, a player, the minimap) put it: that spot, not whatever block is
+    // seen there (something tall in front of it would move the link every time it's opened)
+    if (target && targetLL && c.equals(targetLL)) return target;
+    const p = pick(c);
+    if (p) return [p[0], p[1]];
+    if (p === undefined && exactOnly) return null;
+    return guess(c, WORLDS[world].ground).map(Math.floor);
+  }
+  // more heights arrived: what waited on them can be done now
+  function loaded() {
+    clearTimeout(soon);
+    soon = setTimeout(() => { if (!world) return; follow(); save(); if (last) showCoords(last); }, 50);
+  }
+  // the minimap follows the main view and outlines what it shows. Both use one ground height for the whole view:
+  // the average of the heights around the middle (5 x 5 spots 8 blocks apart), eased a little each time, so it
+  // glides instead of jumping between a tower's top and the ground behind it as you pan.
+  let miniY = null;
+  function follow() {
+    const c = map.getCenter(), b = map.getBounds();
+    let y = miniY == null ? WORLDS[world].ground : miniY;
+    for (let pass = 0; pass < 2; pass++) {
+      const [x, z] = guess(c, y).map(Math.floor); let sum = 0, n = 0;
+      for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+        const h = heightAt(x + 8 * i, z + 8 * j);
+        if (h != null) { sum += h; n++; }               // (still loading, or nothing there: left out)
+      }
+      if (n) y = sum / n;
+    }
+    miniY = miniY == null ? y : miniY + (y - miniY) * 0.3;
+    const [cx, cz] = guess(c, miniY);
+    const pts = [b.getNorthWest(), b.getNorthEast(), b.getSouthEast(), b.getSouthWest()].map(p => flatLL(...guess(p, miniY)));
+    mini.setView(flatLL(cx, cz), Math.min(2, map.getZoom() - 3), { animate: false });
+    if (outline) outline.setLatLngs(pts);
+    else outline = L.polygon(pts, { color: '#fff', weight: 1.5, fill: false, interactive: false }).addTo(mini);
+  }
+  // the minimap: glide there (same view, so just a pan)
+  mini.on('click', async e => {
+    unwatch();
+    const x = Math.floor(e.latlng.lng), z = Math.floor(-e.latlng.lat);
+    const y = await heightNow(x, z);
+    target = [x, z]; targetLL = toLL(x, z, y);
+    map.flyTo(targetLL, map.getZoom(), { duration: 0.6 });
+    map.once('moveend', () => { targetLL = map.getCenter(); });
+  });
+
+  function save() {
+    if (watching) { history.replaceState(null, '', '#follow=' + encodeURIComponent(watching)); return; }   // a link that follows them
+    const c = world && center(true);
+    if (c) history.replaceState(null, '', '#' + [world, ...c, map.getZoom(), rot].join('/'));
+  }
+  function fromHash() {
+    let h = location.hash.slice(1).split('/');
+    if (h.length === 3) h = ['overworld'].concat(h);                   // old links: #x/z/zoom (flat)
+    if (h.length < 4 || h.slice(1, 4).some(v => v === '' || isNaN(+v))) return null;
+    let [w, x, z, zoom, k] = [h[0], +h[1], +h[2], +h[3], +(h[4] || 0)];
+    if (w === 'flat' || w === 'iso') { if (w === 'flat') zoom -= 2; w = 'overworld'; }   // links from before
+    return WORLDS[w] ? [w, x, z, zoom, isNaN(k) ? 0 : k] : null;
+  }
+
+  document.querySelectorAll('[data-world]').forEach(btn => btn.onclick = () => {
+    const to = btn.dataset.world;
+    if (to === world) return;
+    unwatch();
+    let [x, z] = center();
+    if (to === 'nether') { x = Math.floor(x / 8); z = Math.floor(z / 8); } else { x *= 8; z *= 8; }
+    show(to, x, z, map.getZoom(), rot);
+  });
+  // view k + 1 turns the picture clockwise on screen (east moves from lower right to lower left)
+  document.getElementById('left').onclick = () => show(world, ...center(), map.getZoom(), rot + 3);
+  document.getElementById('right').onclick = () => show(world, ...center(), map.getZoom(), rot + 1);
+
+  const followHash = () => { const f = /^#follow=(.+)$/.exec(location.hash); try { return f && decodeURIComponent(f[1]); } catch (e) { return null; } };
+  const h = fromHash(), sp = m.spawn || [0, 0], fh = followHash();   // read before show() rewrites the address
+  if (h) await show(...h); else await show('overworld', sp[0], sp[1], 0, 0);
+  if (fh) { showCard(fh); wantFollow = fh; history.replaceState(null, '', '#follow=' + encodeURIComponent(fh)); }
+  map.on('move', follow);
+  map.on('moveend', () => { if (!watching) save(); });
+  map.on('dragstart', () => unwatch());
+  window.addEventListener('hashchange', () => {      // a link pasted into the address bar
+    const f = followHash();
+    if (f) { if (!watching || watching.toLowerCase() !== f.toLowerCase()) { showCard(f); wantFollow = f; drawPanel(); } return; }
+    const g = fromHash(), c = world && center(true);
+    if (g && !(g[0] === world && g[4] === rot && c && g[1] === c[0] && g[2] === c[1] && g[3] === map.getZoom())) show(...g);
+  });
+  function showCoords(ll) {
+    const p = pick(ll);
+    if (copyTimer) return;                             // still saying "Copied"
+    if (p) { coords.textContent = 'x ' + p[0] + ', y ' + p[2] + ', z ' + p[1]; copyText = p[0] + ' ' + p[2] + ' ' + p[1]; }
+    else { const [x, z] = guess(ll, WORLDS[world].ground).map(Math.floor); coords.textContent = '≈ x ' + x + ', z ' + z; copyText = x + ' ' + z; }
+  }
+  // click the box (or Enter on it): copy the coordinates as "x y z", for a note, a sign or chat
+  let copyText = '', copyTimer = 0;
+  coords.title = 'Click to copy'; coords.tabIndex = 0; coords.setAttribute('role', 'button');
+  async function copyCoords() {
+    if (!copyText) return;
+    try { await navigator.clipboard.writeText(copyText); } catch (e) { return; }   // (no clipboard: nothing)
+    clearTimeout(copyTimer);
+    coords.textContent = 'Copied ' + copyText; coords.classList.add('copied');
+    copyTimer = setTimeout(() => { copyTimer = 0; coords.classList.remove('copied'); if (last) showCoords(last); }, 1200);
+  }
+  coords.onclick = copyCoords;
+  coords.onkeydown = ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); copyCoords(); } };
+  map.on('mousemove', e => { last = e.latlng; showCoords(e.latlng); });
+  // Touch screens: the block under the cross in the middle of the screen. Everywhere: filled in from the start (it
+  // said "x –, z –" until the mouse moved).
+  if (matchMedia('(hover: none)').matches) map.on('move', () => { last = map.getCenter(); showCoords(last); });
+  last = map.getCenter(); showCoords(last);
+  // ---- chat (bottom right): chat.json beside players.json, which the server's script rewrites (at most every 2 s)
+  // when something is said. Asked every 2 s; always shown while it has lines (no chat.json, or nothing said since the
+  // server started: nothing shown). Lines keep the game's § colour codes, drawn here in the game's colours.
+  const chatEl = $('chat'), chList = $('ch-list');
+  const MC = { 0: '000000', 1: '0000aa', 2: '00aa00', 3: '00aaaa', 4: 'aa0000', 5: 'aa00aa', 6: 'ffaa00', 7: 'aaaaaa',
+               8: '555555', 9: '5555ff', a: '55ff55', b: '55ffff', c: 'ff5555', d: 'ff55ff', e: 'ffff55', f: 'ffffff' };
+  const shade = h => '#' + [0, 2, 4].map(i => Math.floor(parseInt(h.substr(i, 2), 16) / 4).toString(16).padStart(2, '0')).join('');
+  let chat = null, chatKey = '';
+  // the time in a narrow column: "5:56" (no AM/PM; hovering shows the full date and time), only when the minute
+  // differs from the line above, like a chat app
+  const clock = d => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }).replace(/\s*[AaPp]\.?\s?[Mm]\.?$/, '');
+  function chatLine(q, i, all) {
+    const p = document.createElement('p'), d = new Date(q.t * 1000), msg = document.createElement('span');
+    const tm = document.createElement('time');
+    // same minute as the line above: by the time itself, not the shown text ("5:56" can be AM, PM or another day)
+    tm.textContent = i > 0 && Math.floor(all[i - 1].t / 60) === Math.floor(q.t / 60) ? '' : clock(d);
+    tm.dateTime = d.toISOString(); p.title = d.toLocaleString(); p.append(tm, msg);
+    const add = (s, c) => {
+      if (!s) return;
+      const sp = document.createElement('span'); sp.textContent = s;
+      if (c) { sp.style.color = '#' + MC[c]; sp.style.textShadow = 'var(--u) var(--u) 0 ' + shade(MC[c]); }
+      msg.append(sp);
+    };
+    const parts = String(q.m).split('§'); let col = null;
+    add(parts[0], col);
+    for (const s of parts.slice(1)) {
+      const c = s.charAt(0).toLowerCase();
+      col = c in MC ? c : null;                         // like the game: any other code (§r, §l, ...) means white
+      add(s.slice(1), col);
+    }
+    return p;
+  }
+  // Just above the Visitors box, and never over the side panel (minimap, world and turn buttons) above it: as tall as
+  // the room between them allows. With too little room (a phone held sideways), or when the open Players panel would
+  // cover it (narrow screens), it steps aside until there's room again.
+  function placeChat() {
+    const v = $('visits'), s = $('side');
+    const bottom = v && !v.hidden ? innerHeight - v.getBoundingClientRect().top + 6 : 16;
+    const top = s && !s.hidden ? s.getBoundingClientRect().bottom + 8 : 14;
+    const u = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--u')) || 2;
+    const room = innerHeight - bottom - top;
+    chatEl.style.setProperty('--chat-bottom', bottom + 'px');
+    chatEl.style.setProperty('--chat-max', Math.max(0, Math.min(room, 160 * u)) + 'px');
+    chatEl.classList.remove('away');
+    let away = room < 40;
+    if (!away && !chatEl.hidden && panel.classList.contains('open')) {
+      const a = panel.getBoundingClientRect(), b = chatEl.getBoundingClientRect();
+      away = a.right > b.left && a.left < b.right && a.top < b.bottom && a.bottom > b.top;
+    }
+    chatEl.classList.toggle('away', away);
+  }
+  onPanelChange = placeChat;
+  // Lines older than CHAT_HOURS aren't shown (a quiet server's last words from yesterday read as if just said), and
+  // none while the server is offline.
+  const CHAT_HOURS = 12;
+  function drawChat() {
+    if (!chat) return;
+    const since = Date.now() / 1000 - CHAT_HOURS * 3600;
+    const lines = chat.lines.filter(q => q.t > since), lastId = lines.length ? lines[lines.length - 1].id : 0;
+    chatEl.hidden = !lines.length || liveOff;
+    placeChat();
+    const key = chat.start + ':' + lastId + ':' + lines.length;
+    if (key === chatKey) return;
+    chatKey = key;
+    const atEnd = chList.scrollHeight - chList.scrollTop - chList.clientHeight < 20;   // reading older lines: stay put
+    chList.replaceChildren(...lines.map(chatLine));
+    if (atEnd || !chList.dataset.drawn) chList.scrollTop = chList.scrollHeight;
+    if (lines.length) chList.dataset.drawn = 1;
+  }
+  async function pollChat() {
+    try {
+      const r = await fetch(m.live.replace(/players\.json$/, 'chat.json'), { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      if (!d || !Array.isArray(d.lines)) return;
+      const lines = d.lines.filter(q => q && Number.isFinite(q.id) && Number.isFinite(q.t) && typeof q.m === 'string');
+      chat = { start: d.start, lines };
+      drawChat();
+    } catch (e) { /* no chat.json here: no chat */ }
+  }
+  window.addEventListener('resize', placeChat);
+  if (m.live) {
+    pollChat();
+    setInterval(() => { if (document.visibilityState !== 'hidden') pollChat(); }, 2000);
+    playtime(); setInterval(playtime, 60000);
+    poll(); setInterval(poll, 2000); document.addEventListener('visibilitychange', poll);
+    // during Leaflet's zoom animation it moves the markers itself; setting them then makes them jump about
+    map.on('zoomstart', () => { zooming = true; });
+    map.on('zoomend', () => { zooming = false; });
+    requestAnimationFrame(place);
+  }
+})();
+</script>
+<script src="custom.js" onerror="this.remove()"></script>
+</body>
+</html>
